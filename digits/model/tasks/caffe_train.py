@@ -128,7 +128,7 @@ class CaffeTrainTask(TrainTask):
         """
         Save solver, train_val and deploy files to disk
         """
-        has_val_set = self.dataset.val_db_task() is not None
+        has_val_set = self.dataset.test_db_task() is not None
 
         ### Check what has been specified in self.network
 
@@ -238,7 +238,7 @@ class CaffeTrainTask(TrainTask):
         train_data_layer.data_param.source = self.dataset.path(self.dataset.train_db_task().db_name)
         train_data_layer.data_param.backend = caffe_pb2.DataParameter.LMDB
         if val_data_layer is not None and has_val_set:
-            val_data_layer.data_param.source = self.dataset.path(self.dataset.val_db_task().db_name)
+            val_data_layer.data_param.source = self.dataset.path(self.dataset.test_db_task().db_name)
             val_data_layer.data_param.backend = caffe_pb2.DataParameter.LMDB
         if self.use_mean:
             mean_pixel = None
@@ -336,7 +336,7 @@ class CaffeTrainTask(TrainTask):
             solver.snapshot = 0 # only take one snapshot at the end
 
         if has_val_set and self.val_interval:
-            solver.test_iter.append(int(math.ceil(float(self.dataset.val_db_task().entries_count) / val_data_layer.data_param.batch_size)))
+            solver.test_iter.append(int(math.ceil(float(self.dataset.test_db_task().entries_count) / val_data_layer.data_param.batch_size)))
             val_interval = self.val_interval * train_iter
             if 0 < val_interval <= 1:
                 solver.test_interval = 1 # don't round down
