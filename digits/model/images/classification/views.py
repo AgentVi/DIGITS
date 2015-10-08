@@ -259,6 +259,12 @@ def image_classification_model_classify_one():
             resize_mode = db_task.resize_mode,
             )
 
+    #crop the image if needed
+    if job.train_task().crop_size:
+        height1 = job.train_task().crop_size
+        width1 = job.train_task().crop_size
+        image = image[(width - width1)/2:width - (width - width1)/2,(height-height1)/2:height - (height-height1)/2]
+
     epoch = None
     if 'snapshot_epoch' in flask.request.form:
         epoch = float(flask.request.form['snapshot_epoch'])
@@ -311,6 +317,9 @@ def image_classification_model_classify_many():
     images = []
     ground_truths = []
     dataset = job.train_task().dataset
+    db_task = job.train_task().dataset.train_db_task()
+    height = db_task.image_dims[0]
+    width = db_task.image_dims[1]
 
     for line in image_list.readlines():
         line = line.strip()
@@ -334,6 +343,13 @@ def image_classification_model_classify_many():
                     channels    = dataset.image_dims[2],
                     resize_mode = dataset.resize_mode,
                     )
+
+            #crop the image if needed
+            if job.train_task().crop_size:
+                height1 = job.train_task().crop_size
+                width1 = job.train_task().crop_size
+                image = image[(width - width1)/2:width - (width - width1)/2,(height-height1)/2:height - (height-height1)/2]
+
             paths.append(path)
             images.append(image)
             ground_truths.append(ground_truth)
