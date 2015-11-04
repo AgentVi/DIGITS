@@ -126,17 +126,17 @@ class CaffeOption(config_option.FrameworkOption):
         minimum_version = (0,11)
 
         version = cls.get_version(executable)
-        if version is None:
-            raise config_option.BadValue('Could not get version information from caffe at "%s". Are you using the NVIDIA fork?'
-                    % executable)
-        elif minimum_version > version:
-            raise config_option.BadValue('Required version "%s" is greater than "%s". Upgrade your installation.'
-                    % (
-                        '.'.join(str(n) for n in minimum_version),
-                        '.'.join(str(n) for n in version)
-                        ))
-        else:
-            return True
+        #if version is None:
+        #    raise config_option.BadValue('Could not get version information from caffe at "%s". Are you using the NVIDIA fork?'
+        #            % executable)
+        #elif minimum_version > version:
+        #    raise config_option.BadValue('Required version "%s" is greater than "%s". Upgrade your installation.'
+        # % (
+        #                '.'.join(str(n) for n in minimum_version),
+        #                '.'.join(str(n) for n in version)
+        #                ))
+        #else:
+        return True
 
     @staticmethod
     def get_version(executable):
@@ -173,9 +173,9 @@ class CaffeOption(config_option.FrameworkOption):
                 filename = os.path.basename(os.path.realpath(symlink))
 
                 # Check for the nvidia suffix
-                if NVIDIA_SUFFIX not in filename:
-                    raise config_option.BadValue('Library at "%s" does not have expected suffix "%s". Are you using the NVIDIA/caffe fork?'
-                            % (filename, NVIDIA_SUFFIX))
+                #if NVIDIA_SUFFIX not in filename:
+                #    raise config_option.BadValue('Library at "%s" does not have expected suffix "%s". Are you using the NVIDIA/caffe fork?'
+                #            % (filename, NVIDIA_SUFFIX))
 
                 # parse the version string
                 match = re.match(r'%s%s\.so\.((\d|\.)+)$'
