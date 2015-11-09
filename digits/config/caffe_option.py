@@ -173,9 +173,9 @@ class CaffeOption(config_option.FrameworkOption):
                 filename = os.path.basename(os.path.realpath(symlink))
 
                 # Check for the nvidia suffix
-                if NVIDIA_SUFFIX not in filename:
-                    raise config_option.BadValue('Library at "%s" does not have expected suffix "%s". Are you using the NVIDIA/caffe fork?'
-                            % (filename, NVIDIA_SUFFIX))
+                #if NVIDIA_SUFFIX not in filename:
+                #    raise config_option.BadValue('Library at "%s" does not have expected suffix "%s". Are you using the NVIDIA/caffe fork?'
+                #            % (filename, NVIDIA_SUFFIX))
 
                 # parse the version string
                 match = re.match(r'%s%s\.so\.((\d|\.)+)$'

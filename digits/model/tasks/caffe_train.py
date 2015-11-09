@@ -298,7 +298,7 @@ class CaffeTrainTask(TrainTask):
         deploy_network.MergeFrom(hidden_layers)
 
         # output layers
-        if loss_layers[-1].type == 'SoftmaxWithLoss':
+        if loss_layers[-1].type == 'SoftmaxWithLoss' or loss_layers[-1].type == 'SoftmaxUnknownWithLoss':
             prob_layer = deploy_network.layer.add(
                     type = 'Softmax',
                     name = 'prob')
