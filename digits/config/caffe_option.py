@@ -126,17 +126,17 @@ class CaffeOption(config_option.FrameworkOption):
         minimum_version = (0,11)
 
         version = cls.get_version(executable)
-        if version is None:
-            raise config_option.BadValue('Could not get version information from caffe at "%s". Are you using the NVIDIA fork?'
-                    % executable)
-        elif minimum_version > version:
-            raise config_option.BadValue('Required version "%s" is greater than "%s". Upgrade your installation.'
-                    % (
-                        '.'.join(str(n) for n in minimum_version),
-                        '.'.join(str(n) for n in version)
-                        ))
-        else:
-            return True
+        #if version is None:
+        #    raise config_option.BadValue('Could not get version information from caffe at "%s". Are you using the NVIDIA fork?'
+        #            % executable)
+        #elif minimum_version > version:
+        #    raise config_option.BadValue('Required version "%s" is greater than "%s". Upgrade your installation.'
+        # % (
+        #                '.'.join(str(n) for n in minimum_version),
+        #                '.'.join(str(n) for n in version)
+        #                ))
+        #else:
+        return True
 
     @staticmethod
     def get_version(executable):
