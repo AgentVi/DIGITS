@@ -446,6 +446,7 @@ def parse_folder(folder, labels_file,
             logger.error('Did not find two valid categories')
             return False
         else:
+            labels.sort()
             with open(labels_file, 'w') as labels_outfile:
                 labels_outfile.write('\n'.join(labels) + '\n')
 
