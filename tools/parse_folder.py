@@ -350,6 +350,23 @@ def parse_folder(folder, labels_file,
 
     subdir_index = 0
     label_index = 0
+
+    if create_labels:
+        for subdir in subdirs:
+            label_name = subdir
+            if folder_is_url:
+                label_name = unescape(label_name)
+            else:
+                label_name = os.path.basename(label_name)
+            label_name = label_name.replace('_',' ')
+            if label_name.endswith('/'):
+                # Remove trailing slash
+                label_name = label_name[0:-1]
+
+            labels.append(label_name)
+
+        labels.sort()
+
     for subdir in subdirs:
         # Use the directory name as the label
         label_name = subdir
@@ -362,19 +379,15 @@ def parse_folder(folder, labels_file,
             # Remove trailing slash
             label_name = label_name[0:-1]
 
-        if create_labels:
-            labels.append(label_name)
-            label_index = len(labels)-1
-        else:
-            found = False
-            for i, l in enumerate(labels):
-                if label_name == l:
-                    found = True
-                    label_index = i
-                    break
-            if not found:
-                logger.warning('Category "%s" not found in labels_file. Skipping.' % label_name)
-                continue
+        found = False
+        for i, l in enumerate(labels):
+            if label_name == l:
+                found = True
+                label_index = i
+                break
+        if not found:
+            logger.warning('Category "%s" not found in labels_file. Skipping.' % label_name)
+            continue
 
         logger.debug('Category - %s' % label_name)
 
