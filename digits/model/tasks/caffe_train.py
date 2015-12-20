@@ -149,7 +149,7 @@ class CaffeTrainTask(TrainTask):
                     elif rule.phase == caffe_pb2.TEST:
                         assert val_data_layer is None, 'cannot specify two test data layers'
                         val_data_layer = layer
-            elif layer.type == 'SoftmaxWithLoss' or layer.type == 'SoftmaxUnknownWithLoss':
+            elif layer.type == 'SoftmaxWithLoss' or layer.type == 'SoftmaxUnknownWithLoss' or layer.type =='AggregateProbabilityLoss':
                 loss_layers.append(layer)
             elif layer.type == 'Accuracy':
                 addThis = True
@@ -298,7 +298,7 @@ class CaffeTrainTask(TrainTask):
         deploy_network.MergeFrom(hidden_layers)
 
         # output layers
-        if loss_layers[-1].type == 'SoftmaxWithLoss' or loss_layers[-1].type == 'SoftmaxUnknownWithLoss':
+        if loss_layers[-1].type == 'SoftmaxWithLoss' or loss_layers[-1].type == 'SoftmaxUnknownWithLoss'  or loss_layers[-1].type =='AggregateProbabilityLoss':
             prob_layer = deploy_network.layer.add(
                     type = 'Softmax',
                     name = 'prob')
