@@ -555,6 +555,8 @@ def _load_thread(load_queue, write_queue, summary_queue,
     else:
         image_sum = None
 
+
+
     while not load_queue.empty():
         try:
             path, label = load_queue.get(True, 0.05)
@@ -577,6 +579,7 @@ def _load_thread(load_queue, write_queue, summary_queue,
                 resize_mode = resize_mode,
                 )
 
+        print  image_sum.size,image.size
         if compute_mean:
             image_sum += image
 
