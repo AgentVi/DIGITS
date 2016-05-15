@@ -1,9 +1,10 @@
-# Copyright (c) 2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2015-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
 import os.path
 
-from digits.utils import subclass, override
 from ..job import ImageModelJob
+from digits.utils import subclass, override
 
 # NOTE: Increment this everytime the pickled object changes
 PICKLE_VERSION = 1
@@ -38,15 +39,19 @@ class GenericImageModelJob(ImageModelJob):
         if not snapshot_filename:
             raise ValueError('Invalid epoch')
 
-        files = [
-                (self.path(task.deploy_file),
-                    os.path.basename(task.deploy_file)),
-                (snapshot_filename,
-                    os.path.basename(snapshot_filename)),
-                ]
+        # get model files
+        model_files = task.get_model_files()
+        download_files = [(self.path(filename), os.path.basename(filename))
+                          for filename in model_files.values()]
+
         if task.dataset.mean_file:
-            files.append((
+            download_files.append((
                 task.dataset.path(task.dataset.mean_file),
                 os.path.basename(task.dataset.mean_file)))
-        return files
+
+        # add snapshot
+        download_files.append((snapshot_filename,
+                    os.path.basename(snapshot_filename)))
+
+        return download_files
 

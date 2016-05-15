@@ -1,22 +1,18 @@
-#!/usr/bin/env python
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+#!/usr/bin/env python2
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
 
-import sys
-import os
-import re
 import argparse
-import time
 import logging
+import os
 import random
+import requests
+import re
+import sys
+import time
 import urllib
 
-import requests
-
-try:
-    import digits
-except ImportError:
-    # Add path for DIGITS package
-    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add path for DIGITS package
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import digits.config
 digits.config.load_config()
 from digits import utils, log
@@ -285,7 +281,7 @@ def parse_folder(folder, labels_file,
         ):
     """
     Parses a folder of images into three textfiles
-    Returns True on sucess
+    Returns True on success
 
     Arguments:
     folder -- a folder containing folders of images (can be a filesystem path or a url)
@@ -331,6 +327,8 @@ def parse_folder(folder, labels_file,
             logger.error('folder does not exist')
             return False
 
+    subdirs.sort()
+
     if len(subdirs) < 2:
         logger.error('folder must contain at least two subdirectories')
         return False
@@ -350,23 +348,6 @@ def parse_folder(folder, labels_file,
 
     subdir_index = 0
     label_index = 0
-
-    if create_labels:
-        for subdir in subdirs:
-            label_name = subdir
-            if folder_is_url:
-                label_name = unescape(label_name)
-            else:
-                label_name = os.path.basename(label_name)
-            label_name = label_name.replace('_',' ')
-            if label_name.endswith('/'):
-                # Remove trailing slash
-                label_name = label_name[0:-1]
-
-            labels.append(label_name)
-
-        labels.sort()
-
     for subdir in subdirs:
         # Use the directory name as the label
         label_name = subdir
@@ -379,15 +360,19 @@ def parse_folder(folder, labels_file,
             # Remove trailing slash
             label_name = label_name[0:-1]
 
-        found = False
-        for i, l in enumerate(labels):
-            if label_name == l:
-                found = True
-                label_index = i
-                break
-        if not found:
-            logger.warning('Category "%s" not found in labels_file. Skipping.' % label_name)
-            continue
+        if create_labels:
+            labels.append(label_name)
+            label_index = len(labels)-1
+        else:
+            found = False
+            for i, l in enumerate(labels):
+                if label_name == l:
+                    found = True
+                    label_index = i
+                    break
+            if not found:
+                logger.warning('Category "%s" not found in labels_file. Skipping.' % label_name)
+                continue
 
         logger.debug('Category - %s' % label_name)
 
@@ -459,7 +444,6 @@ def parse_folder(folder, labels_file,
             logger.error('Did not find two valid categories')
             return False
         else:
-            labels.sort()
             with open(labels_file, 'w') as labels_outfile:
                 labels_outfile.write('\n'.join(labels) + '\n')
 

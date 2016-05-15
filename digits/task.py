@@ -1,21 +1,21 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
-import os.path
-import re
-import time
 import logging
-import subprocess
+import os.path
+import platform
+import re
 import signal
+import subprocess
+import time
 
 import flask
 import gevent.event
 
 from . import utils
+from .config import config_value
+from .status import Status, StatusCls
 import digits.log
-from config import config_value
-from status import Status, StatusCls
-
-import platform
 
 # NOTE: Increment this everytime the pickled version changes
 PICKLE_VERSION = 1
@@ -127,8 +127,8 @@ class Task(StatusCls):
             path = filename
         else:
             path = os.path.join(self.job_dir, filename)
-        if relative:
-            path = os.path.relpath(path, config_value('jobs_dir'))
+            if relative:
+                path = os.path.relpath(path, config_value('jobs_dir'))
         return str(path).replace("\\","/")
 
     def ready_to_queue(self):
@@ -151,13 +151,14 @@ class Task(StatusCls):
         """
         raise NotImplementedError
 
-    def task_arguments(self, resources):
+    def task_arguments(self, resources, env):
         """
         Returns args used by subprocess.Popen to execute the task
         Returns False if the args cannot be set properly
 
         Arguments:
         resources -- the resources assigned by the scheduler for this task
+        environ   -- os.environ instance to run process in
         """
         raise NotImplementedError
 
@@ -177,7 +178,8 @@ class Task(StatusCls):
         """
         self.before_run()
 
-        args = self.task_arguments(resources)
+        env = os.environ.copy()
+        args = self.task_arguments(resources, env )
         if not args:
             self.logger.error('Could not create the arguments for Popen')
             self.status = Status.ERROR
@@ -190,11 +192,14 @@ class Task(StatusCls):
 
         unrecognized_output = []
 
+        import sys
+        env['PYTHONPATH'] = os.pathsep.join(['.', self.job_dir, env.get('PYTHONPATH', '')] + sys.path)
         p = subprocess.Popen(args,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 cwd=self.job_dir,
                 close_fds=False if platform.system() == 'Windows' else True,
+                env=env,
                 )
 
         try:
@@ -257,6 +262,7 @@ class Task(StatusCls):
         if self.status.is_running():
             self.aborted.set()
 
+
     def preprocess_output_digits(self, line):
         """
         Takes line of output and parses it according to DIGITS's log format
@@ -316,3 +322,23 @@ class Task(StatusCls):
         """
         pass
 
+    def emit_progress_update(self):
+        """
+        Call socketio.emit for task progress update, and trigger job progress update.
+        """
+        from digits.webapp import socketio
+        socketio.emit('task update',
+                {
+                    'task': self.html_id(),
+                    'update': 'progress',
+                    'percentage': int(round(100*self.progress)),
+                    'eta': utils.time_filters.print_time_diff(self.est_done()),
+                    },
+                namespace='/jobs',
+                room=self.job_id,
+                )
+
+        from digits.webapp import scheduler
+        job = scheduler.get_job(self.job_id)
+        if job:
+            job.emit_progress_update()

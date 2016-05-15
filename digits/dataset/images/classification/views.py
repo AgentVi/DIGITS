@@ -1,17 +1,29 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
 import os
 
+# Find the best implementation available
+try:
+    from cStringIO import StringIO
+except ImportError:
+    from StringIO import StringIO
+
+import caffe_pb2
 import flask
+import lmdb
+import PIL.Image
 
+from .forms import ImageClassificationDatasetForm
+from .job import ImageClassificationDatasetJob
 from digits import utils
-from digits.utils.routing import request_wants_json, job_from_request
-from digits.webapp import app, scheduler, autodoc
 from digits.dataset import tasks
-from forms import ImageClassificationDatasetForm
-from job import ImageClassificationDatasetJob
+from digits.utils.forms import fill_form_if_cloned, save_form_to_job
+from digits.utils.routing import request_wants_json, job_from_request
+from digits.webapp import scheduler
 
-NAMESPACE = '/datasets/images/classification'
+
+blueprint = flask.Blueprint(__name__, __name__)
 
 def from_folders(job, form):
     """
@@ -84,7 +96,9 @@ def from_folders(job, form):
 
     ### Add CreateDbTasks
 
+    backend = form.backend.data
     encoding = form.encoding.data
+    compression = form.compression.data
 
     job.tasks.append(
             tasks.CreateDbTask(
@@ -92,9 +106,11 @@ def from_folders(job, form):
                 parents     = parse_train_task,
                 input_file  = utils.constants.TRAIN_FILE,
                 db_name     = utils.constants.TRAIN_DB,
+                backend     = backend,
                 image_dims  = job.image_dims,
                 resize_mode = job.resize_mode,
                 encoding    = encoding,
+                compression = compression,
                 mean_file   = utils.constants.MEAN_FILE_CAFFE,
                 labels_file = job.labels_file,
                 )
@@ -107,9 +123,11 @@ def from_folders(job, form):
                     parents     = val_parents,
                     input_file  = utils.constants.VAL_FILE,
                     db_name     = utils.constants.VAL_DB,
+                    backend     = backend,
                     image_dims  = job.image_dims,
                     resize_mode = job.resize_mode,
                     encoding    = encoding,
+                    compression = compression,
                     labels_file = job.labels_file,
                     )
                 )
@@ -121,9 +139,11 @@ def from_folders(job, form):
                     parents     = test_parents,
                     input_file  = utils.constants.TEST_FILE,
                     db_name     = utils.constants.TEST_DB,
+                    backend     = backend,
                     image_dims  = job.image_dims,
                     resize_mode = job.resize_mode,
                     encoding    = encoding,
+                    compression = compression,
                     labels_file = job.labels_file,
                     )
                 )
@@ -141,8 +161,10 @@ def from_files(job, form):
                 )
         job.labels_file = utils.constants.LABELS_FILE
 
-    encoding = form.encoding.data
     shuffle = bool(form.textfile_shuffle.data)
+    backend = form.backend.data
+    encoding = form.encoding.data
+    compression = form.compression.data
 
     ### train
     if form.textfile_use_local_files.data:
@@ -162,10 +184,12 @@ def from_files(job, form):
                 job_dir     = job.dir(),
                 input_file  = train_file,
                 db_name     = utils.constants.TRAIN_DB,
+                backend     = backend,
                 image_dims  = job.image_dims,
                 image_folder= image_folder,
                 resize_mode = job.resize_mode,
                 encoding    = encoding,
+                compression = compression,
                 mean_file   = utils.constants.MEAN_FILE_CAFFE,
                 labels_file = job.labels_file,
                 shuffle     = shuffle,
@@ -192,10 +216,12 @@ def from_files(job, form):
                     job_dir     = job.dir(),
                     input_file  = val_file,
                     db_name     = utils.constants.VAL_DB,
+                    backend     = backend,
                     image_dims  = job.image_dims,
                     image_folder= image_folder,
                     resize_mode = job.resize_mode,
                     encoding    = encoding,
+                    compression = compression,
                     labels_file = job.labels_file,
                     shuffle     = shuffle,
                     )
@@ -221,35 +247,45 @@ def from_files(job, form):
                     job_dir     = job.dir(),
                     input_file  = test_file,
                     db_name     = utils.constants.TEST_DB,
+                    backend     = backend,
                     image_dims  = job.image_dims,
                     image_folder= image_folder,
                     resize_mode = job.resize_mode,
                     encoding    = encoding,
+                    compression = compression,
                     labels_file = job.labels_file,
                     shuffle     = shuffle,
                     )
                 )
 
 
-@app.route(NAMESPACE + '/new', methods=['GET'])
-@autodoc('datasets')
-def image_classification_dataset_new():
+@blueprint.route('/new', methods=['GET'])
+@utils.auth.requires_login
+def new():
     """
     Returns a form for a new ImageClassificationDatasetJob
     """
     form = ImageClassificationDatasetForm()
+
+    ## Is there a request to clone a job with ?clone=<job_id>
+    fill_form_if_cloned(form)
+
     return flask.render_template('datasets/images/classification/new.html', form=form)
 
-@app.route(NAMESPACE + '.json', methods=['POST'])
-@app.route(NAMESPACE, methods=['POST'])
-@autodoc(['datasets', 'api'])
-def image_classification_dataset_create():
+@blueprint.route('.json', methods=['POST'])
+@blueprint.route('', methods=['POST'], strict_slashes=False)
+@utils.auth.requires_login(redirect=False)
+def create():
     """
     Creates a new ImageClassificationDatasetJob
 
     Returns JSON when requested: {job_id,name,status} or {errors:[]}
     """
     form = ImageClassificationDatasetForm()
+
+    ## Is there a request to clone a job with ?clone=<job_id>
+    fill_form_if_cloned(form)
+
     if not form.validate_on_submit():
         if request_wants_json():
             return flask.jsonify({'errors': form.errors}), 400
@@ -259,6 +295,7 @@ def image_classification_dataset_create():
     job = None
     try:
         job = ImageClassificationDatasetJob(
+                username    = utils.auth.get_username(),
                 name        = form.dataset_name.data,
                 image_dims  = (
                     int(form.resize_height.data),
@@ -277,11 +314,14 @@ def image_classification_dataset_create():
         else:
             raise ValueError('method not supported')
 
+        ## Save form data with the job so we can easily clone it later.
+        save_form_to_job(job, form)
+
         scheduler.add_job(job)
         if request_wants_json():
             return flask.jsonify(job.json_dict())
         else:
-            return flask.redirect(flask.url_for('datasets_show', job_id=job.id()))
+            return flask.redirect(flask.url_for('digits.dataset.views.show', job_id=job.id()))
 
     except:
         if job:
@@ -294,9 +334,8 @@ def show(job):
     """
     return flask.render_template('datasets/images/classification/show.html', job=job)
 
-@app.route(NAMESPACE + '/summary', methods=['GET'])
-@autodoc('datasets')
-def image_classification_dataset_summary():
+@blueprint.route('/summary', methods=['GET'])
+def summary():
     """
     Return a short HTML summary of a DatasetJob
     """
@@ -304,3 +343,110 @@ def image_classification_dataset_summary():
 
     return flask.render_template('datasets/images/classification/summary.html', dataset=job)
 
+class DbReader(object):
+    """
+    Reads a database
+    """
+
+    def __init__(self, location):
+        """
+        Arguments:
+        location -- where is the database
+        """
+        self._db = lmdb.open(location,
+                map_size=1024**3, # 1MB
+                readonly=True, lock=False)
+
+        with self._db.begin() as txn:
+            self.total_entries = txn.stat()['entries']
+
+    def entries(self):
+        """
+        Generator returning all entries in the DB
+        """
+        with self._db.begin() as txn:
+            cursor = txn.cursor()
+            for item in cursor:
+                yield item
+
+@blueprint.route('/explore', methods=['GET'])
+def explore():
+    """
+    Returns a gallery consisting of the images of one of the dbs
+    """
+    job = job_from_request()
+    # Get LMDB
+    db = flask.request.args.get('db', 'train')
+    if 'train' in db.lower():
+        task = job.train_db_task()
+    elif 'val' in db.lower():
+        task = job.val_db_task()
+    elif 'test' in db.lower():
+        task = job.test_db_task()
+    if task is None:
+        raise ValueError('No create_db task for {0}'.format(db))
+    if task.status != 'D':
+        raise ValueError("This create_db task's status should be 'D' but is '{0}'".format(task.status))
+    if task.backend != 'lmdb':
+        raise ValueError("Backend is {0} while expected backend is lmdb".format(task.backend))
+    db_path = job.path(task.db_name)
+    labels = task.get_labels()
+
+    page = int(flask.request.args.get('page', 0))
+    size = int(flask.request.args.get('size', 25))
+    label = flask.request.args.get('label', None)
+
+    if label is not None:
+        try:
+            label = int(label)
+            label_str = labels[label]
+        except ValueError:
+            label = None
+
+    reader = DbReader(db_path)
+    count = 0
+    imgs = []
+
+    min_page = max(0, page - 5)
+    if label is None:
+        total_entries = reader.total_entries
+    else:
+        total_entries = task.distribution[str(label)]
+
+    max_page = min((total_entries-1) / size, page + 5)
+    pages = range(min_page, max_page + 1)
+    for key, value in reader.entries():
+        if count >= page*size:
+            datum = caffe_pb2.Datum()
+            datum.ParseFromString(value)
+            if label is None or datum.label == label:
+                if datum.encoded:
+                    s = StringIO()
+                    s.write(datum.data)
+                    s.seek(0)
+                    img = PIL.Image.open(s)
+                else:
+                    import caffe.io
+                    arr = caffe.io.datum_to_array(datum)
+                    # CHW -> HWC
+                    arr = arr.transpose((1,2,0))
+                    if arr.shape[2] == 1:
+                        # HWC -> HW
+                        arr = arr[:,:,0]
+                    elif arr.shape[2] == 3:
+                        # BGR -> RGB
+                        # XXX see issue #59
+                        arr = arr[:,:,[2,1,0]]
+                    img = PIL.Image.fromarray(arr)
+                imgs.append({"label":labels[datum.label], "b64": utils.image.embed_image_html(img)})
+        if label is None:
+            count += 1
+        else:
+            datum = caffe_pb2.Datum()
+            datum.ParseFromString(value)
+            if datum.label == int(label):
+                count += 1
+        if len(imgs) >= size:
+            break
+
+    return flask.render_template('datasets/images/classification/explore.html', page=page, size=size, job=job, imgs=imgs, labels=labels, pages=pages, label=label, total_entries=total_entries, db=db)

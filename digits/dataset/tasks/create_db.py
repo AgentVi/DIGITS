@@ -1,14 +1,15 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
-import sys
+import operator
 import os.path
 import re
-import operator
+import sys
 
 import digits
 from digits import utils
-from digits.utils import subclass, override
 from digits.task import Task
+from digits.utils import subclass, override
 
 # NOTE: Increment this everytime the pickled version changes
 PICKLE_VERSION = 3
@@ -17,11 +18,12 @@ PICKLE_VERSION = 3
 class CreateDbTask(Task):
     """Creates a database"""
 
-    def __init__(self, input_file, db_name, image_dims, **kwargs):
+    def __init__(self, input_file, db_name, backend, image_dims, **kwargs):
         """
         Arguments:
         input_file -- read images and labels from this file
         db_name -- save database to this location
+        backend -- database backend (lmdb/hdf5)
         image_dims -- (height, width, channels)
 
         Keyword Arguments:
@@ -29,6 +31,7 @@ class CreateDbTask(Task):
         shuffle -- shuffle images before saving
         resize_mode -- used in utils.image.resize_image()
         encoding -- 'none', 'png' or 'jpg'
+        compression -- 'none' or 'gzip'
         mean_file -- save mean file to this location
         labels_file -- used to print category distribution
         """
@@ -37,6 +40,7 @@ class CreateDbTask(Task):
         self.shuffle = kwargs.pop('shuffle', True)
         self.resize_mode = kwargs.pop('resize_mode' , None)
         self.encoding = kwargs.pop('encoding', None)
+        self.compression = kwargs.pop('compression', None)
         self.mean_file = kwargs.pop('mean_file', None)
         self.labels_file = kwargs.pop('labels_file', None)
 
@@ -45,6 +49,10 @@ class CreateDbTask(Task):
 
         self.input_file = input_file
         self.db_name = db_name
+        self.backend = backend
+        if backend == 'hdf5':
+            # the list of hdf5 files is stored in a textfile
+            self.textfile = os.path.join(self.db_name, 'list.txt')
         self.image_dims = image_dims
         if image_dims[2] == 3:
             self.image_channel_order = 'BGR'
@@ -68,7 +76,6 @@ class CreateDbTask(Task):
         super(CreateDbTask, self).__setstate__(state)
 
         if self.pickver_task_createdb <= 1:
-            print 'Upgrading CreateDbTask to version 2'
             if self.image_dims[2] == 1:
                 self.image_channel_order = None
             elif self.encode:
@@ -76,7 +83,6 @@ class CreateDbTask(Task):
             else:
                 self.image_channel_order = 'RGB'
         if self.pickver_task_createdb <= 2:
-            print 'Upgrading CreateDbTask to version 3'
             if hasattr(self, 'encode'):
                 if self.encode:
                     self.encoding = 'jpg'
@@ -86,6 +92,11 @@ class CreateDbTask(Task):
             else:
                 self.encoding = 'none'
         self.pickver_task_createdb = PICKLE_VERSION
+
+        if not hasattr(self, 'backend') or self.backend is None:
+            self.backend = 'lmdb'
+        if not hasattr(self, 'compression') or self.compression is None:
+            self.compression = 'none'
 
     @override
     def name(self):
@@ -125,7 +136,7 @@ class CreateDbTask(Task):
         return None
 
     @override
-    def task_arguments(self, resources):
+    def task_arguments(self, resources, env):
         args = [sys.executable, os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(digits.__file__))),
             'tools', 'create_db.py'),
@@ -133,6 +144,7 @@ class CreateDbTask(Task):
                 self.path(self.db_name),
                 self.image_dims[1],
                 self.image_dims[0],
+                '--backend=%s' % self.backend,
                 '--channels=%s' % self.image_dims[2],
                 '--resize_mode=%s' % self.resize_mode,
                 ]
@@ -147,6 +159,10 @@ class CreateDbTask(Task):
             args.append('--shuffle')
         if self.encoding and self.encoding != 'none':
             args.append('--encoding=%s' % self.encoding)
+        if self.compression and self.compression != 'none':
+            args.append('--compression=%s' % self.compression)
+        if self.backend == 'hdf5':
+            args.append('--hdf5_dset_limit=%d' % 2**31)
 
         return args
 
@@ -165,16 +181,7 @@ class CreateDbTask(Task):
         match = re.match(r'Processed (\d+)\/(\d+)', message)
         if match:
             self.progress = float(match.group(1))/int(match.group(2))
-            socketio.emit('task update',
-                    {
-                        'task': self.html_id(),
-                        'update': 'progress',
-                        'percentage': int(round(100*self.progress)),
-                        'eta': utils.time_filters.print_time_diff(self.est_done()),
-                        },
-                    namespace='/jobs',
-                    room=self.job_id,
-                    )
+            self.emit_progress_update()
             return True
 
         # distribution
@@ -217,8 +224,43 @@ class CreateDbTask(Task):
 
     @override
     def after_run(self):
+        from digits.webapp import socketio
+
         super(CreateDbTask, self).after_run()
         self.create_db_log.close()
+
+        if self.backend == 'lmdb':
+            socketio.emit('task update',
+                    {
+                        'task': self.html_id(),
+                        'update': 'exploration-ready',
+                        },
+                    namespace='/jobs',
+                    room=self.job_id,
+                    )
+
+        elif self.backend == 'hdf5':
+            # add more path information to the list of h5 files
+            lines = None
+            with open(self.path(self.textfile)) as infile:
+                lines = infile.readlines()
+            with open(self.path(self.textfile), 'w') as outfile:
+                for line in lines:
+                    # XXX this works because the model job will be in an adjacent folder
+                    outfile.write('%s\n' % os.path.join(
+                        '..', self.job_id, self.db_name, line.strip()))
+
+        if self.mean_file:
+            socketio.emit('task update',
+                    {
+                        'task': self.html_id(),
+                        'update': 'mean-image',
+                        # XXX Can't use url_for here because we don't have a request context
+                        'data': '/files/' + self.path('mean.jpg', relative=True),
+                        },
+                    namespace='/jobs',
+                    room=self.job_id,
+                    )
 
     def get_labels(self):
         """

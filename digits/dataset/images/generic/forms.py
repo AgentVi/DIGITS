@@ -1,4 +1,5 @@
-# Copyright (c) 2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2015-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
 import os.path
 
@@ -6,8 +7,8 @@ import wtforms
 from wtforms import validators
 
 from ..forms import ImageDatasetForm
-from digits.utils.forms import validate_required_iff
 from digits import utils
+from digits.utils.forms import validate_required_iff
 
 class GenericImageDatasetForm(ImageDatasetForm):
     """
@@ -61,6 +62,20 @@ class GenericImageDatasetForm(ImageDatasetForm):
             validators=[
                 validate_lmdb_path,
                 ]
+            )
+
+    # Can't use a BooleanField here because HTML doesn't submit anything
+    # for an unchecked checkbox. Since we want to use a REST API and have
+    # this default to True when nothing is supplied, we have to use a
+    # SelectField
+    force_same_shape = utils.forms.SelectField('Enforce same shape',
+            choices = [
+                (1, 'Yes'),
+                (0, 'No'),
+                ],
+            coerce = int,
+            default = 1,
+            tooltip = 'Check that each entry in the database has the same shape (can be time-consuming)'
             )
 
     prebuilt_mean_file = utils.forms.StringField('Mean Image',

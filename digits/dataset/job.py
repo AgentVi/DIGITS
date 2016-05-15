@@ -1,8 +1,9 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
+from . import tasks
 from digits.job import Job
 from digits.utils import subclass, override
-from . import tasks
 
 # NOTE: Increment this everytime the pickled object changes
 PICKLE_VERSION = 1
@@ -25,12 +26,23 @@ class DatasetJob(Job):
 
         if verbose:
             d.update({
-                'ParseFolderTasks': [{"name":        t.name(),
-                                      "label_count": t.label_count,
-                                      "train_count": t.train_count,
-                                      "val_count":   t.val_count,
-                                      "test_count":  t.test_count,
-                                      } for t in self.parse_folder_tasks()],
+                'ParseFolderTasks': [{
+                    "name":        t.name(),
+                    "label_count": t.label_count,
+                    "train_count": t.train_count,
+                    "val_count":   t.val_count,
+                    "test_count":  t.test_count,
+                    } for t in self.parse_folder_tasks()],
+                'CreateDbTasks': [{
+                    "name":             t.name(),
+                    "entries":          t.entries_count,
+                    "image_width":      t.image_dims[0],
+                    "image_height":     t.image_dims[1],
+                    "image_channels":   t.image_dims[2],
+                    "backend":          t.backend,
+                    "encoding":         t.encoding,
+                    "compression":      t.compression,
+                                      } for t in self.create_db_tasks()],
                 })
         return d
 
@@ -50,10 +62,7 @@ class DatasetJob(Job):
         """
         Return the task that creates the training set
         """
-        for t in self.tasks:
-            if isinstance(t, tasks.CreateDbTask) and 'train' in t.name().lower():
-                return t
-        return None
+        raise NotImplementedError('Please implement me')
 
     def val_db_task(self):
         """

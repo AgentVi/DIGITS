@@ -1,14 +1,15 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
-import os
-import math
+import inspect
+from io import BlockingIOError
 import locale
+import math
+import os
+import pkg_resources
+import platform
 from random import uniform
 from urlparse import urlparse
-from io import BlockingIOError
-import inspect
-import platform
-
 
 if not platform.system() == 'Windows':
     import fcntl
@@ -126,7 +127,32 @@ def sizeof_fmt(size, suffix='B'):
     else:
         return '0 %s' % suffix
 
+def parse_version(*args):
+    """
+    Returns a sortable version
+
+    Arguments:
+    args -- a string, tuple, or list of arguments to be joined with "."'s
+    """
+    v = None
+    if len(args) == 1:
+        a = args[0]
+        if isinstance(a, tuple):
+            v = '.'.join(str(x) for x in a)
+        else:
+            v = str(a)
+    else:
+        v = '.'.join(str(a) for a in args)
+
+    if v.startswith('v'):
+        v = v[1:]
+
+    try:
+        return pkg_resources.SetuptoolsVersion(v)
+    except AttributeError:
+        return pkg_resources.parse_version(v)
+
 ### Import the other utility functions
 
-from . import constants, image, time_filters, errors, forms
+from . import constants, image, time_filters, errors, forms, routing, auth
 

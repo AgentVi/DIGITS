@@ -1,15 +1,16 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
-import time
-import os.path
 from collections import OrderedDict, namedtuple
+import os.path
+import time
 
-import gevent
 import flask
+import gevent
 
-from digits import utils, device_query
+from digits import device_query
 from digits.task import Task
-from digits.utils import override
+from digits.utils import subclass, override
 
 # NOTE: Increment this everytime the picked object changes
 PICKLE_VERSION = 2
@@ -17,6 +18,7 @@ PICKLE_VERSION = 2
 # Used to store network outputs
 NetworkOutput = namedtuple('NetworkOutput', ['kind', 'data'])
 
+@subclass
 class TrainTask(Task):
     """
     Defines required methods for child classes
@@ -38,7 +40,7 @@ class TrainTask(Task):
         val_interval -- how many epochs between validating the model with an epoch of validation data
         pretrained_model -- filename for a model to use for fine-tuning
         crop_size -- crop each image down to a square of this size
-        use_mean -- subtract the dataset's mean file
+        use_mean -- subtract the dataset's mean file or mean pixel
         random_seed -- optional random seed
         """
         self.gpu_count = kwargs.pop('gpu_count', None)
@@ -84,7 +86,6 @@ class TrainTask(Task):
 
     def __setstate__(self, state):
         if state['pickver_task_train'] < 2:
-            print 'Upgrading TrainTask to version 2'
             state['train_outputs'] = OrderedDict()
             state['val_outputs'] = OrderedDict()
 
@@ -101,6 +102,12 @@ class TrainTask(Task):
                 if va:
                     state['val_outputs']['accuracy'] = NetworkOutput('Accuracy', [x[1]/100 for x in va])
                 state['val_outputs']['loss'] = NetworkOutput('SoftmaxWithLoss', [x[1] for x in vl])
+
+        if state['use_mean'] == True:
+            state['use_mean'] = 'pixel'
+        elif state['use_mean'] == False:
+            state['use_mean'] = 'none'
+
         state['pickver_task_train'] = PICKLE_VERSION
         super(TrainTask, self).__setstate__(state)
 
@@ -200,24 +207,12 @@ class TrainTask(Task):
         """
         Sends socketio message about the current progress
         """
-        from digits.webapp import socketio
-
         if self.current_epoch == epoch:
             return
 
         self.current_epoch = epoch
         self.progress = epoch/self.train_epochs
-
-        socketio.emit('task update',
-                {
-                    'task': self.html_id(),
-                    'update': 'progress',
-                    'percentage': int(round(100*self.progress)),
-                    'eta': utils.time_filters.print_time_diff(self.est_done()),
-                    },
-                namespace='/jobs',
-                room=self.job_id,
-                )
+        self.emit_progress_update()
 
     def save_train_output(self, *args):
         """
@@ -246,6 +241,20 @@ class TrainTask(Task):
                     namespace='/jobs',
                     room=self.job_id,
                     )
+
+            if data['columns']:
+                # isolate the Loss column data for the sparkline
+                graph_data = data['columns'][0][1:]
+                socketio.emit('task update',
+                              {
+                                  'task': self.html_id(),
+                                  'job_id': self.job_id,
+                                  'update': 'combined_graph',
+                                  'data': graph_data,
+                              },
+                              namespace='/jobs',
+                              room='job_management',
+                          )
 
         # lr graph data
         data = self.lr_graph_data()
@@ -476,11 +485,15 @@ class TrainTask(Task):
                     col_id = '%s-train' % name
                     data['xs'][col_id] = 'train_epochs'
                     data['names'][col_id] = '%s (train)' % name
-                    if 'accuracy' in output.kind.lower():
-                        data['columns'].append([col_id] + [100*x for x in output.data[::stride]])
+                    if 'accuracy' in output.kind.lower() or 'accuracy' in name.lower():
+                        data['columns'].append([col_id] + [
+                            (100*x if x is not None else 'none')
+                            for x in output.data[::stride]])
                         data['axes'][col_id] = 'y2'
                     else:
-                        data['columns'].append([col_id] + output.data[::stride])
+                        data['columns'].append([col_id] + [
+                            (x if x is not None else 'none')
+                            for x in output.data[::stride]])
                     added_train_data = True
         if added_train_data:
             data['columns'].append(['train_epochs'] + self.train_outputs['epoch'].data[::stride])
@@ -497,11 +510,15 @@ class TrainTask(Task):
                     col_id = '%s-val' % name
                     data['xs'][col_id] = 'val_epochs'
                     data['names'][col_id] = '%s (val)' % name
-                    if 'accuracy' in output.kind.lower():
-                        data['columns'].append([col_id] + [100*x for x in output.data[::stride]])
+                    if 'accuracy' in output.kind.lower() or 'accuracy' in name.lower():
+                        data['columns'].append([col_id] + [
+                            (100*x if x is not None else 'none')
+                            for x in output.data[::stride]])
                         data['axes'][col_id] = 'y2'
                     else:
-                        data['columns'].append([col_id] + output.data[::stride])
+                        data['columns'].append([col_id] + [
+                            (x if x is not None else 'none')
+                            for x in output.data[::stride]])
                     added_val_data = True
         if added_val_data:
             data['columns'].append(['val_epochs'] + self.val_outputs['epoch'].data[::stride])
@@ -514,8 +531,10 @@ class TrainTask(Task):
             return None
 
     # return id of framework used for training
-    @override
     def get_framework_id(self):
+        """
+        Returns a string
+        """
         return self.framework_id
 
     def get_model_files(self):

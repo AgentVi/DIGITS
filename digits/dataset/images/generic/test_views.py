@@ -1,26 +1,30 @@
-# Copyright (c) 2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2015-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
+import itertools
 import json
 import os
 import shutil
 import tempfile
 import time
 import unittest
-import itertools
 import urllib
 
-from gevent import monkey
-monkey.patch_all()
+# Find the best implementation available
+try:
+    from cStringIO import StringIO
+except ImportError:
+    from StringIO import StringIO
+
 from bs4 import BeautifulSoup
 import PIL.Image
 from urlparse import urlparse
-from cStringIO import StringIO
 
+from .test_lmdb_creator import create_lmdbs
 import digits.test_views
-from test_lmdb_creator import create_lmdbs
 
 # May be too short on a slow system
-TIMEOUT_DATASET = 15
+TIMEOUT_DATASET = 45
 
 ################################################################################
 # Base classes (they don't start with "Test" so nose won't run them)
@@ -61,9 +65,10 @@ class BaseViewsTestWithImageset(BaseViewsTest):
     @classmethod
     def setUpClass(cls):
         super(BaseViewsTestWithImageset, cls).setUpClass()
-        cls.imageset_folder = tempfile.mkdtemp()
-        # create imageset
-        cls.test_image = create_lmdbs(cls.imageset_folder)
+        if not hasattr(BaseViewsTestWithImageset, 'imageset_folder'):
+            # Create folder and LMDBs for all test classes
+            BaseViewsTestWithImageset.imageset_folder = tempfile.mkdtemp()
+            BaseViewsTestWithImageset.test_image = create_lmdbs(BaseViewsTestWithImageset.imageset_folder)
         cls.created_datasets = []
 
     @classmethod
@@ -71,8 +76,6 @@ class BaseViewsTestWithImageset(BaseViewsTest):
         # delete any created datasets
         for job_id in cls.created_datasets:
             cls.delete_dataset(job_id)
-        # delete imageset
-        shutil.rmtree(cls.imageset_folder)
         super(BaseViewsTestWithImageset, cls).tearDownClass()
 
     @classmethod
@@ -91,7 +94,6 @@ class BaseViewsTestWithImageset(BaseViewsTest):
                 'prebuilt_train_images': os.path.join(cls.imageset_folder, 'train_images'),
                 'prebuilt_train_labels': os.path.join(cls.imageset_folder, 'train_labels'),
                 'prebuilt_val_images': os.path.join(cls.imageset_folder, 'val_images'),
-                'prebuilt_val_labels': os.path.join(cls.imageset_folder, 'val_labels'),
                 'prebuilt_val_labels': os.path.join(cls.imageset_folder, 'val_labels'),
                 'prebuilt_mean_file': os.path.join(cls.imageset_folder, 'train_mean.binaryproto'),
                 }
@@ -112,12 +114,13 @@ class BaseViewsTestWithImageset(BaseViewsTest):
 
         # expect a redirect
         if not 300 <= rv.status_code <= 310:
-            s = BeautifulSoup(rv.data)
+            s = BeautifulSoup(rv.data, 'html.parser')
             div = s.select('div.alert-danger')
             if div:
-                raise RuntimeError(div[0])
+                print div[0]
             else:
-                raise RuntimeError('Failed to create dataset')
+                print rv.data
+            raise RuntimeError('Failed to create dataset - status %s' % rv.status_code)
 
         job_id = cls.job_id_from_response(rv)
 
@@ -187,6 +190,44 @@ class TestCreation(BaseViewsTestWithImageset):
         assert self.delete_dataset(job_id) == 200, 'delete failed'
         assert not self.dataset_exists(job_id), 'dataset exists after delete'
 
+    def test_no_force_same_shape(self):
+        job_id = self.create_dataset(force_same_shape=0)
+        assert self.dataset_wait_completion(job_id) == 'Done', 'create failed'
+
+    def test_clone(self):
+        options_1 = {
+            'resize_channels': '1',
+        }
+
+        job1_id = self.create_dataset(**options_1)
+        assert self.dataset_wait_completion(job1_id) == 'Done', 'first job failed'
+        rv = self.app.get('/datasets/%s.json' % job1_id)
+        assert rv.status_code == 200, 'json load failed with %s' % rv.status_code
+        content1 = json.loads(rv.data)
+
+        ## Clone job1 as job2
+        options_2 = {
+            'clone': job1_id,
+        }
+
+        job2_id = self.create_dataset(**options_2)
+        assert self.dataset_wait_completion(job2_id) == 'Done', 'second job failed'
+        rv = self.app.get('/datasets/%s.json' % job2_id)
+        assert rv.status_code == 200, 'json load failed with %s' % rv.status_code
+        content2 = json.loads(rv.data)
+
+        ## These will be different
+        content1.pop('id')
+        content2.pop('id')
+        content1.pop('directory')
+        content2.pop('directory')
+        assert (content1 == content2), 'job content does not match'
+
+        job1 = digits.webapp.scheduler.get_job(job1_id)
+        job2 = digits.webapp.scheduler.get_job(job2_id)
+
+        assert (job1.form_data == job2.form_data), 'form content does not match'
+
 class TestCreated(BaseViewsTestWithDataset):
     """
     Tests on a dataset that has already been created
@@ -207,4 +248,18 @@ class TestCreated(BaseViewsTestWithDataset):
         assert rv.status_code == 200, 'page load failed with %s' % rv.status_code
         content = json.loads(rv.data)
         assert content['id'] == self.dataset_id, 'expected different job_id'
+
+    def test_edit_name(self):
+        status = self.edit_job(
+                self.dataset_id,
+                name='new name'
+                )
+        assert status == 200, 'failed with %s' % status
+
+    def test_edit_notes(self):
+        status = self.edit_job(
+                self.dataset_id,
+                notes='new notes'
+                )
+        assert status == 200, 'failed with %s' % status
 

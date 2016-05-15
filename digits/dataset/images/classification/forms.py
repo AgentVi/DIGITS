@@ -1,4 +1,5 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
 import os.path
 import requests
@@ -14,6 +15,29 @@ class ImageClassificationDatasetForm(ImageDatasetForm):
     """
     Defines the form used to create a new ImageClassificationDatasetJob
     """
+
+    backend = wtforms.SelectField('DB backend',
+            choices = [
+                ('lmdb', 'LMDB'),
+                ('hdf5', 'HDF5'),
+                ],
+            default='lmdb',
+            )
+
+    def validate_backend(form, field):
+        if field.data == 'lmdb':
+            form.compression.data = 'none'
+        elif field.data == 'hdf5':
+            form.encoding.data = 'none'
+
+    compression = utils.forms.SelectField('DB compression',
+            choices = [
+                ('none', 'None'),
+                ('gzip', 'GZIP'),
+                ],
+            default='none',
+            tooltip='Compressing the dataset may significantly decrease the size of your database files, but it may increase read and write times.',
+            )
 
     # Use a SelectField instead of a HiddenField so that the default value
     # is used when nothing is provided (through the REST API)
@@ -165,7 +189,7 @@ class ImageClassificationDatasetForm(ImageDatasetForm):
     textfile_use_local_files = wtforms.BooleanField(u'Use local files',
         default=False)
 
-    textfile_train_images = wtforms.FileField(u'Training images',
+    textfile_train_images = utils.forms.FileField(u'Training images',
             validators=[
                 validate_required_iff(method='textfile',
                                       textfile_use_local_files=False)
@@ -196,7 +220,7 @@ class ImageClassificationDatasetForm(ImageDatasetForm):
                 validate_required_iff(method='textfile')
                 ]
             )
-    textfile_val_images = wtforms.FileField(u'Validation images',
+    textfile_val_images = utils.forms.FileField(u'Validation images',
             validators=[
                 validate_required_iff(
                     method='textfile',
@@ -231,7 +255,7 @@ class ImageClassificationDatasetForm(ImageDatasetForm):
                 validate_required_iff(method='textfile')
                 ]
             )
-    textfile_test_images = wtforms.FileField(u'Test images',
+    textfile_test_images = utils.forms.FileField(u'Test images',
             validators=[
                 validate_required_iff(
                     method='textfile',

@@ -1,9 +1,10 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
 import os.path
 
-from digits.utils import subclass, override
 from ..job import ImageModelJob
+from digits.utils import subclass, override
 
 # NOTE: Increment this everytime the pickled object changes
 PICKLE_VERSION = 1
@@ -40,8 +41,8 @@ class ImageClassificationModelJob(ImageModelJob):
 
         # get model files
         model_files = task.get_model_files()
-        download_files = [(self.path(file), os.path.basename(file))
-                          for file in model_files.values()]
+        download_files = [(self.path(filename), os.path.basename(filename))
+                          for filename in model_files.values()]
 
         # add other files
         download_files.extend([

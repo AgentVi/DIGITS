@@ -1,4 +1,5 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
 import time
 
@@ -117,6 +118,8 @@ class StatusCls(object):
         # If the status is Done, then force the progress to 100%
         if value == Status.DONE:
             self.progress = 1.0
+            if hasattr(self, 'emit_progress_update'):
+                self.emit_progress_update()
 
         # Don't invoke callback for INIT
         if value != Status.INIT:

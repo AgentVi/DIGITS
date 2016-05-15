@@ -1,26 +1,30 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
+import itertools
 import json
 import os
 import shutil
 import tempfile
 import time
 import unittest
-import itertools
 import urllib
 
-from gevent import monkey
-monkey.patch_all()
+# Find the best implementation available
+try:
+    from cStringIO import StringIO
+except ImportError:
+    from StringIO import StringIO
+
 from bs4 import BeautifulSoup
 import PIL.Image
 from urlparse import urlparse
-from cStringIO import StringIO
 
+from .test_imageset_creator import create_classification_imageset, IMAGE_SIZE as DUMMY_IMAGE_SIZE, IMAGE_COUNT as DUMMY_IMAGE_COUNT
 import digits.test_views
-from test_imageset_creator import create_classification_imageset, IMAGE_SIZE as DUMMY_IMAGE_SIZE, IMAGE_COUNT as DUMMY_IMAGE_COUNT
 
 # May be too short on a slow system
-TIMEOUT_DATASET = 15
+TIMEOUT_DATASET = 45
 
 ################################################################################
 # Base classes (they don't start with "Test" so nose won't run them)
@@ -61,10 +65,13 @@ class BaseViewsTestWithImageset(BaseViewsTest):
     """
     Provides an imageset and some functions
     """
-    # Inherited classes may want to override these attributes
+    # Inherited classes may want to override these default attributes
     IMAGE_HEIGHT    = 10
     IMAGE_WIDTH     = 10
     IMAGE_CHANNELS  = 3
+    BACKEND         = 'lmdb'
+    ENCODING        = 'png'
+    COMPRESSION     = 'none'
 
     UNBALANCED_CATEGORY = False
 
@@ -103,6 +110,9 @@ class BaseViewsTestWithImageset(BaseViewsTest):
                 'resize_channels':  cls.IMAGE_CHANNELS,
                 'resize_width':     cls.IMAGE_WIDTH,
                 'resize_height':    cls.IMAGE_HEIGHT,
+                'backend':          cls.BACKEND,
+                'encoding':         cls.ENCODING,
+                'compression':      cls.COMPRESSION,
                 }
         data.update(kwargs)
 
@@ -121,12 +131,13 @@ class BaseViewsTestWithImageset(BaseViewsTest):
 
         # expect a redirect
         if not 300 <= rv.status_code <= 310:
-            s = BeautifulSoup(rv.data)
+            s = BeautifulSoup(rv.data, 'html.parser')
             div = s.select('div.alert-danger')
             if div:
-                raise RuntimeError(div[0])
+                print div[0]
             else:
-                raise RuntimeError('Failed to create dataset')
+                print rv.data
+            raise RuntimeError('Failed to create dataset - status %s' % rv.status_code)
 
         job_id = cls.job_id_from_response(rv)
 
@@ -148,6 +159,49 @@ class BaseViewsTestWithDataset(BaseViewsTestWithImageset):
         super(BaseViewsTestWithDataset, cls).setUpClass()
         cls.dataset_id = cls.create_dataset(json=True)
         assert cls.dataset_wait_completion(cls.dataset_id) == 'Done', 'create failed'
+
+    def test_clone(self):
+        options_1 = {
+            'encoding': 'png',
+            'folder_pct_test': 0,
+            'folder_pct_val': 25,
+            'folder_test': '',
+            'folder_test_max_per_class': None,
+            'folder_test_min_per_class': 2,
+            'folder_train_max_per_class': 3,
+            'folder_train_min_per_class': 1,
+            'folder_val_max_per_class': None,
+            'folder_val_min_per_class': 2,
+            'resize_mode': 'half_crop',
+        }
+
+        job1_id = self.create_dataset(**options_1)
+        assert self.dataset_wait_completion(job1_id) == 'Done', 'first job failed'
+        rv = self.app.get('/datasets/%s.json' % job1_id)
+        assert rv.status_code == 200, 'json load failed with %s' % rv.status_code
+        content1 = json.loads(rv.data)
+
+        ## Clone job1 as job2
+        options_2 = {
+            'clone': job1_id,
+        }
+
+        job2_id = self.create_dataset(**options_2)
+        assert self.dataset_wait_completion(job2_id) == 'Done', 'second job failed'
+        rv = self.app.get('/datasets/%s.json' % job2_id)
+        assert rv.status_code == 200, 'json load failed with %s' % rv.status_code
+        content2 = json.loads(rv.data)
+
+        ## These will be different
+        content1.pop('id')
+        content2.pop('id')
+        content1.pop('directory')
+        content2.pop('directory')
+        assert (content1 == content2), 'job content does not match'
+
+        job1 = digits.webapp.scheduler.get_job(job1_id)
+        job2 = digits.webapp.scheduler.get_job(job2_id)
+        assert (job1.form_data == job2.form_data), 'form content does not match'
 
 ################################################################################
 # Test classes
@@ -259,6 +313,14 @@ class TestCreation(BaseViewsTestWithImageset):
 
         job_id = self.create_dataset(**data)
         assert self.dataset_wait_completion(job_id) == 'Done', 'create failed'
+
+    def test_abort_explore_fail(self):
+        job_id = self.create_dataset()
+        self.abort_dataset(job_id)
+        rv = self.app.get('/datasets/images/classification/explore?job_id=%s&db=val' % job_id)
+        assert rv.status_code == 500, 'page load should have failed'
+        assert 'status should be' in rv.data, 'unexpected page format'
+
 
 class TestImageCount(BaseViewsTestWithImageset):
 
@@ -409,6 +471,45 @@ class TestCreated(BaseViewsTestWithDataset):
         pil_image = PIL.Image.open(buff)
         assert pil_image.size == (self.IMAGE_WIDTH, self.IMAGE_HEIGHT), 'image size is %s' % (pil_image.size,)
 
+    def test_edit_name(self):
+        status = self.edit_job(
+                self.dataset_id,
+                name='new name'
+                )
+        assert status == 200, 'failed with %s' % status
+
+    def test_edit_notes(self):
+        status = self.edit_job(
+                self.dataset_id,
+                notes='new notes'
+                )
+        assert status == 200, 'failed with %s' % status
+
+    def test_backend_selection(self):
+        rv = self.app.get('/datasets/%s.json' % self.dataset_id)
+        content = json.loads(rv.data)
+        for task in content['CreateDbTasks']:
+            assert task['backend'] == self.BACKEND
+
+    def test_explore_train(self):
+        rv = self.app.get('/datasets/images/classification/explore?job_id=%s&db=train' % self.dataset_id)
+        if self.BACKEND == 'hdf5':
+            # Not supported yet
+            assert rv.status_code == 500, 'page load should have failed'
+            assert 'expected backend is lmdb' in rv.data, 'unexpected page format'
+        else:
+            assert rv.status_code == 200, 'page load failed with %s' % rv.status_code
+            assert 'Items per page' in rv.data, 'unexpected page format'
+
+    def test_explore_val(self):
+        rv = self.app.get('/datasets/images/classification/explore?job_id=%s&db=val' % self.dataset_id)
+        if self.BACKEND == 'hdf5':
+            # Not supported yet
+            assert rv.status_code == 500, 'page load should have failed'
+            assert 'expected backend is lmdb' in rv.data, 'unexpected page format'
+        else:
+            assert rv.status_code == 200, 'page load failed with %s' % rv.status_code
+            assert 'Items per page' in rv.data, 'unexpected page format'
 
 class TestCreatedGrayscale(TestCreated):
     IMAGE_CHANNELS = 1
@@ -419,3 +520,24 @@ class TestCreatedWide(TestCreated):
 class TestCreatedTall(TestCreated):
     IMAGE_HEIGHT = 20
 
+class TestCreatedJPEG(TestCreated):
+    ENCODING = 'jpg'
+
+class TestCreatedRaw(TestCreated):
+    ENCODING = 'none'
+
+class TestCreatedRawGrayscale(TestCreated):
+    ENCODING = 'none'
+    IMAGE_CHANNELS = 1
+
+class TestCreatedHdf5(TestCreated):
+    BACKEND = 'hdf5'
+
+    def test_compression_method(self):
+        rv = self.app.get('/datasets/%s.json' % self.dataset_id)
+        content = json.loads(rv.data)
+        for task in content['CreateDbTasks']:
+            assert task['compression'] == self.COMPRESSION
+
+class TestCreatedHdf5Gzip(TestCreatedHdf5):
+    COMPRESSION = 'gzip'

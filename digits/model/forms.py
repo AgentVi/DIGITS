@@ -1,7 +1,8 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
 
 import os
 
+import flask
 from flask.ext.wtf import Form
 import wtforms
 from wtforms import validators
@@ -33,12 +34,59 @@ class ModelForm(Form):
         except frameworks.errors.BadNetworkError as e:
             raise validators.ValidationError('Bad network: %s' % e.message)
 
+    def validate_file_exists(form, field):
+        from_client = bool(form.python_layer_from_client.data)
+
+        filename = ''
+        if not from_client and field.type == 'StringField':
+            filename = field.data
+
+        if filename == '': return
+
+        if not os.path.isfile(filename):
+            raise validators.ValidationError('Server side file, %s, does not exist.' % filename)
+
+    def validate_py_ext(form, field):
+        from_client = bool(form.python_layer_from_client.data)
+
+        filename = ''
+        if from_client and field.type == 'FileField':
+            filename = flask.request.files[field.name].filename
+        elif not from_client and field.type == 'StringField':
+            filename = field.data
+
+        if filename == '': return
+
+        (root, ext) = os.path.splitext(filename)
+        if ext != '.py' and ext != '.pyc':
+            raise validators.ValidationError('Python file, %s, needs .py or .pyc extension.' % filename)
+
     ### Fields
 
     # The options for this get set in the view (since they are dynamic)
     dataset = utils.forms.SelectField('Select Dataset', choices=[],
                 tooltip = "Choose the dataset to use for this model."
             )
+
+
+    python_layer_from_client = utils.forms.BooleanField(u'Use client-side file',
+                                                default=False)
+
+    python_layer_client_file = utils.forms.FileField(
+        u'Client-side file',
+        validators=[
+            validate_py_ext
+        ],
+        tooltip = "Choose a Python file on the client containing layer definitions."
+    )
+    python_layer_server_file = utils.forms.StringField(
+        u'Server-side file',
+        validators=[
+            validate_file_exists,
+            validate_py_ext
+        ],
+        tooltip = "Choose a Python file on the server containing layer definitions."
+    )
 
     train_epochs = utils.forms.IntegerField('Training epochs',
             validators = [
@@ -82,15 +130,26 @@ class ModelForm(Form):
 
     ### Solver types
 
-    solver_type = utils.forms.SelectField('Solver type',
+    solver_type = utils.forms.SelectField(
+        'Solver type',
         choices = [
-                ('SGD', 'Stochastic gradient descent (SGD)'),
-                ('ADAGRAD', 'Adaptive gradient (AdaGrad)'),
-                ('NESTEROV', "Nesterov's accelerated gradient (NAG)"),
-                ],
-            default = 'SGD',
-            tooltip = "What type of solver will be used??"
-            )
+            ('SGD', 'Stochastic gradient descent (SGD)'),
+            ('NESTEROV', "Nesterov's accelerated gradient (NAG)"),
+            ('ADAGRAD', 'Adaptive gradient (AdaGrad)'),
+            ('RMSPROP', 'RMSprop'),
+            ('ADADELTA', 'AdaDelta'),
+            ('ADAM', 'Adam'),
+        ],
+        default = 'SGD',
+        tooltip = "What type of solver will be used?",
+    )
+
+    def validate_solver_type(form, field):
+        fw = frameworks.get_framework_by_id(form.framework)
+        if fw is not None:
+            if not fw.supports_solver_type(field.data):
+                raise validators.ValidationError(
+                    'Solver type not supported by this framework')
 
     ### Learning rate
 
@@ -199,8 +258,8 @@ class ModelForm(Form):
                 ],
             )
 
-    custom_network_snapshot = utils.forms.TextField('Pretrained model',
-                tooltip = "Path to pretrained model file. Only edit this field if you understand how fine-tuning works in caffe"
+    custom_network_snapshot = utils.forms.TextField('Pretrained model(s)',
+                tooltip = "Colon delimited paths to pretrained model files. Only edit this field if you understand how fine-tuning works in caffe or torch."
             )
 
 
@@ -215,13 +274,15 @@ class ModelForm(Form):
     select_gpu = wtforms.RadioField('Select which GPU you would like to use',
             choices = [('next', 'Next available')] + [(
                 index,
-                '#%s - %s%s' % (
+                '#%s - %s (%s memory)' % (
                     index,
                     get_device(index).name,
-                    ' (%s memory)' % sizeof_fmt(get_nvml_info(index)['memory']['total'])
-                        if get_nvml_info(index) and 'memory' in get_nvml_info(index) else '',
-                    ),
-                ) for index in config_value('gpu_list').split(',') if index],
+                    sizeof_fmt(
+                        get_nvml_info(index)['memory']['total']
+                        if get_nvml_info(index) and 'memory' in get_nvml_info(index)
+                        else get_device(index).totalGlobalMem)
+                ),
+            ) for index in config_value('gpu_list').split(',') if index],
             default = 'next',
             )
 
@@ -229,13 +290,15 @@ class ModelForm(Form):
     select_gpus = utils.forms.SelectMultipleField('Select which GPU[s] you would like to use',
             choices = [(
                 index,
-                '#%s - %s%s' % (
+                '#%s - %s (%s memory)' % (
                     index,
                     get_device(index).name,
-                    ' (%s memory)' % sizeof_fmt(get_nvml_info(index)['memory']['total'])
-                        if get_nvml_info(index) and 'memory' in get_nvml_info(index) else '',
-                    ),
-                ) for index in config_value('gpu_list').split(',') if index],
+                    sizeof_fmt(
+                        get_nvml_info(index)['memory']['total']
+                        if get_nvml_info(index) and 'memory' in get_nvml_info(index)
+                        else get_device(index).totalGlobalMem)
+                ),
+            ) for index in config_value('gpu_list').split(',') if index],
             tooltip = "The job won't start until all of the chosen GPUs are available."
             )
 

@@ -1,13 +1,14 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
-import sys
 import os.path
 import re
+import sys
 
 import digits
 from digits import utils
-from digits.utils import subclass, override
 from digits.task import Task
+from digits.utils import subclass, override
 
 # NOTE: Increment this everytime the pickled object
 PICKLE_VERSION = 1
@@ -114,7 +115,7 @@ class ParseFolderTask(Task):
         return None
 
     @override
-    def task_arguments(self, resources):
+    def task_arguments(self, resources, env):
         args = [sys.executable, os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(digits.__file__))),
             'tools', 'parse_folder.py'),
@@ -138,8 +139,6 @@ class ParseFolderTask(Task):
 
     @override
     def process_output(self, line):
-        from digits.webapp import socketio
-
         timestamp, level, message = self.preprocess_output_digits(line)
         if not message:
             return False
@@ -148,16 +147,7 @@ class ParseFolderTask(Task):
         match = re.match(r'Progress: ([-+]?[0-9]*\.?[0-9]+(e[-+]?[0-9]+)?)', message)
         if match:
             self.progress = float(match.group(1))
-            socketio.emit('task update',
-                    {
-                        'task': self.html_id(),
-                        'update': 'progress',
-                        'percentage': int(round(100*self.progress)),
-                        'eta': utils.time_filters.print_time_diff(self.est_done()),
-                        },
-                    namespace='/jobs',
-                    room=self.job_id,
-                    )
+            self.emit_progress_update()
             return True
 
         # totals

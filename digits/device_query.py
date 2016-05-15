@@ -1,6 +1,8 @@
-#!/usr/bin/env python
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+#!/usr/bin/env python2
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
+import argparse
 import ctypes
 import platform
 
@@ -107,27 +109,52 @@ def get_library(name):
     Returns a ctypes.CDLL or None
     """
     try:
-        if platform.system() == 'Linux':
-            return ctypes.cdll.LoadLibrary('%s.so' % name)
-        elif platform.system() == 'Darwin':
-            return ctypes.cdll.LoadLibrary('%s.dylib' % name)
-        elif platform.system() == 'Windows':
-            return ctypes.windll.LoadLibrary('%s.dll' % name)
+        if platform.system() == 'Windows':
+            return ctypes.windll.LoadLibrary(name)
+        else:
+            return ctypes.cdll.LoadLibrary(name)
     except OSError:
         pass
     return None
 
-devices = None
-
 def get_cudart():
-    if not platform.system() == 'Windows':
-        return get_library('libcudart')
-    
-    arch = platform.architecture()[0]
-    for ver in range(90,50,-5):
-        cudart = get_library('cudart%s_%d' % (arch[:2], ver))
-        if not cudart is None:
-            return cudart
+    """
+    Return the ctypes.DLL object for cudart or None
+    """
+    if platform.system() == 'Windows':
+        arch = platform.architecture()[0]
+        for ver in range(90,50,-5):
+            cudart = get_library('cudart%s_%d.dll' % (arch[:2], ver))
+            if cudart is not None:
+                return cudart
+    else:
+        for name in (
+                'libcudart.so.7.0',
+                'libcudart.so.7.5',
+                'libcudart.so.8.0',
+                'libcudart.so'):
+            cudart = get_library(name)
+            if cudart is not None:
+                return cudart
+    return None
+
+def get_nvml():
+    """
+    Return the ctypes.DLL object for cudart or None
+    """
+    if platform.system() == 'Windows':
+        return get_library('nvml.dll')
+    else:
+        for name in (
+                'libnvidia-ml.so.1',
+                'libnvidia-ml.so',
+                'nvml.so'):
+            nvml = get_library(name)
+            if nvml is not None:
+                return nvml
+    return None
+
+devices = None
 
 def get_devices(force_reload=False):
     """
@@ -190,11 +217,9 @@ def get_nvml_info(device_id):
     if device is None:
         return None
 
-    nvml = get_library('libnvidia-ml')
+    nvml = get_nvml()
     if nvml is None:
-        nvml = get_library('nvml')
-        if nvml is None:
-            return None
+        return None
 
     rc = nvml.nvmlInit()
     if rc != 0:
@@ -240,29 +265,45 @@ def get_nvml_info(device_id):
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='DIGITS Device Query')
+    parser.add_argument('-v', '--verbose', action='store_true')
+    args = parser.parse_args()
+
     if not len(get_devices()):
         print 'No devices found.'
+
     for i, device in enumerate(get_devices()):
-        print 'Device #%d: %s' % (i, device.name)
+        print 'Device #%d:' % i
+        print '>>> CUDA attributes:'
         for name, t in device._fields_:
-            # Don't print int arrays
-            if t in [ctypes.c_char, ctypes.c_int, ctypes.c_size_t]:
-                print '%30s %s' % (name, getattr(device, name))
+            if not args.verbose and name not in [
+                    'name', 'totalGlobalMem', 'clockRate', 'major', 'minor',]:
+                continue
+
+            if 'c_int_Array' in t.__name__:
+                val = ','.join(str(v) for v in getattr(device, name))
+            else:
+                val = getattr(device, name)
+
+            print '  %-28s %s' % (name, val)
+
         info = get_nvml_info(i)
         if info is not None:
-            nvml_fmt = '%23s (NVML) %s'
+            print '>>> NVML attributes:'
+            nvml_fmt = '  %-28s %s'
             if 'memory' in info:
                 print nvml_fmt % ('Total memory',
                         '%s MB' % (info['memory']['total'] / 2**20,))
                 print nvml_fmt % ('Used memory',
                         '%s MB' % (info['memory']['used'] / 2**20,))
-                print nvml_fmt % ('Free memory',
+                if args.verbose:
+                    print nvml_fmt % ('Free memory',
                         '%s MB' % (info['memory']['free'] / 2**20,))
             if 'utilization' in info:
-                print nvml_fmt % ('GPU utilization',
-                        '%s%%' % info['utilization']['gpu'])
                 print nvml_fmt % ('Memory utilization',
                         '%s%%' % info['utilization']['memory'])
+                print nvml_fmt % ('GPU utilization',
+                        '%s%%' % info['utilization']['gpu'])
             if 'temperature' in info:
                 print nvml_fmt % ('Temperature',
                         '%s C' % info['temperature'])

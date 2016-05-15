@@ -1,32 +1,35 @@
-#!/usr/bin/env python
-# Copyright (c) 2015, NVIDIA CORPORATION.  All rights reserved.
+#!/usr/bin/env python2
+# Copyright (c) 2015-2016, NVIDIA CORPORATION.  All rights reserved.
 """
 Functions for creating temporary LMDBs
 Used in test_views
 """
+from __future__ import absolute_import
 
+import argparse
+from collections import defaultdict
 import os
 import sys
 import time
-import argparse
-from collections import defaultdict
-from cStringIO import StringIO
 
+# Find the best implementation available
+try:
+    from cStringIO import StringIO
+except ImportError:
+    from StringIO import StringIO
+
+import lmdb
 import numpy as np
 import PIL.Image
-import lmdb
 
 if __name__ == '__main__':
     dirname = os.path.dirname(os.path.realpath(__file__))
-    sys.path.append(os.path.join(dirname,'..','..','..','..'))
+    sys.path.insert(0, os.path.join(dirname,'..','..','..','..'))
     from digits.config.load  import load_config
     load_config()
 
-try:
-    import caffe_pb2
-except ImportError:
-    # See issue #32
-    from caffe.proto import caffe_pb2
+# Run load_config() first to set the path to Caffe
+import caffe_pb2
 
 
 IMAGE_SIZE  = 10

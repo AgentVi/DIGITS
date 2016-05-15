@@ -1,4 +1,5 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
 from ..job import DatasetJob
 
@@ -29,6 +30,7 @@ class ImageDatasetJob(DatasetJob):
             ('squash', 'Squash'),
             ('fill', 'Fill'),
             ('half_crop', 'Half crop, half fill'),
+            ('pad_fill', 'Pad and Fill')
         ]
 
     def resize_mode_name(self):

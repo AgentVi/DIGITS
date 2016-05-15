@@ -1,13 +1,13 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
-import time
 import json
+import time
 import urllib
 
-from gevent import monkey; monkey.patch_all()
 from urlparse import urlparse
 
-import webapp
+from . import webapp
 
 ################################################################################
 # Base classes (they don't start with "Test" so nose won't run them)
@@ -28,6 +28,10 @@ class BaseViewsTest(object):
         cls.created_datasets = []
         cls.created_models = []
 
+        rv = cls.app.post('/login', data={
+            'username':'digits-testsuite'})
+        assert rv.status_code == 302, 'Login failed with %s' % rv.status_code
+
     @classmethod
     def tearDownClass(cls):
         # Remove all created jobs
@@ -35,6 +39,9 @@ class BaseViewsTest(object):
             cls.delete_model(job_id)
         for job_id in cls.created_datasets:
             cls.delete_dataset(job_id)
+
+        rv = cls.app.post('/logout')
+        assert rv.status_code == 302, 'Logout failed with %s' % rv.status_code
 
     @classmethod
     def job_id_from_response(cls, rv):
@@ -78,6 +85,16 @@ class BaseViewsTest(object):
         return info
 
     @classmethod
+    def job_info_html(cls, job_id, job_type='jobs'):
+        """
+        Get job information (full HTML response)
+        """
+        url = '/%s/%s' % (job_type, job_id)
+        rv = cls.app.get(url)
+        assert rv.status_code == 200, 'Cannot get info from job %s. "%s" returned %s' % (job_id, url, rv.status_code)
+        return rv.data
+
+    @classmethod
     def abort_job(cls, job_id, job_type='jobs'):
         """
         Abort a job
@@ -107,6 +124,19 @@ class BaseViewsTest(object):
                 return status
             assert (time.time() - start) < timeout, 'Job took more than %s seconds' % timeout
             time.sleep(polling_period)
+
+    @classmethod
+    def edit_job(cls, job_id, name=None, notes=None):
+        """
+        Edit the name of a job
+        """
+        data = {}
+        if name:
+            data['job_name'] = name
+        if notes:
+            data['job_notes'] = notes
+        rv = cls.app.put('/jobs/%s' % job_id, data=data)
+        return rv.status_code
 
     @classmethod
     def delete_job(cls, job_id, job_type='jobs'):

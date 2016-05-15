@@ -1,15 +1,17 @@
-# Copyright (c) 2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2015-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
-import os
-import re
-import sys
 import imp
+import os
 import platform
+import re
 import subprocess
+import sys
 
+from . import config_option
+from . import prompt
 from digits import device_query
-import config_option
-import prompt
+from digits.utils import parse_version
 
 class CaffeOption(config_option.FrameworkOption):
     @staticmethod
@@ -123,20 +125,20 @@ class CaffeOption(config_option.FrameworkOption):
         Arguments:
         executable -- path to a caffe executable
         """
-        minimum_version = (0,11)
-
+        minimum_version = parse_version(0,11,0)
         version = cls.get_version(executable)
-        #if version is None:
-        #    raise config_option.BadValue('Could not get version information from caffe at "%s". Are you using the NVIDIA fork?'
-        #            % executable)
-        #elif minimum_version > version:
-        #    raise config_option.BadValue('Required version "%s" is greater than "%s". Upgrade your installation.'
-        # % (
-        #                '.'.join(str(n) for n in minimum_version),
-        #                '.'.join(str(n) for n in version)
-        #                ))
-        #else:
-        return True
+
+        if version is None:
+            raise config_option.BadValue('Could not get version information from caffe at "%s". Are you using the NVIDIA fork?'
+                    % executable)
+        elif minimum_version > version:
+            raise config_option.BadValue('Required version "%s" is greater than "%s". Upgrade your installation.'
+                    % (
+                        '.'.join(str(n) for n in minimum_version),
+                        '.'.join(str(n) for n in version)
+                        ))
+        else:
+            return True
 
     @staticmethod
     def get_version(executable):
@@ -173,25 +175,25 @@ class CaffeOption(config_option.FrameworkOption):
                 filename = os.path.basename(os.path.realpath(symlink))
 
                 # Check for the nvidia suffix
-                #if NVIDIA_SUFFIX not in filename:
-                #    raise config_option.BadValue('Library at "%s" does not have expected suffix "%s". Are you using the NVIDIA/caffe fork?'
-                #            % (filename, NVIDIA_SUFFIX))
+                if NVIDIA_SUFFIX not in filename:
+                    raise config_option.BadValue('Library at "%s" does not have expected suffix "%s". Are you using the NVIDIA/caffe fork?'
+                            % (filename, NVIDIA_SUFFIX))
 
                 # parse the version string
-                match = re.match(r'%s%s\.so\.((\d|\.)+)$'
+                match = re.match(r'%s%s\.so\.(\S+)$'
                         % (libname, NVIDIA_SUFFIX), filename)
                 if match:
                     version_str = match.group(1)
-                    return tuple(int(n) for n in version_str.split('.'))
+                    return parse_version(version_str)
                 else:
                     return None
 
         elif platform.system() == 'Darwin':
             # XXX: guess and let the user figure out errors later
-            return (0,11,0)
+            return parse_version(0,11,0)
         elif platform.system() == 'Windows':
             # XXX: guess and let the user figure out errors later
-            return (0,11,0)
+            return parse_version(0,11,0)
         else:
             print 'WARNING: platform "%s" not supported' % platform.system()
             return None
@@ -209,7 +211,7 @@ class CaffeOption(config_option.FrameworkOption):
 
             version = self.get_version(executable)
 
-            if version >= (0,12):
+            if version >= parse_version(0,12):
                 multi_gpu = True
             else:
                 multi_gpu = False
@@ -239,16 +241,18 @@ class CaffeOption(config_option.FrameworkOption):
                 #   so that build/tools/caffe is aware of python layers there
                 os.environ['PYTHONPATH'] = '%s:%s' % (p, os.environ.get('PYTHONPATH'))
 
+            # for Windows environment, loading h5py before caffe solves the issue mentioned in
+            # https://github.com/NVIDIA/DIGITS/issues/47#issuecomment-206292824
+            import h5py
             try:
                 import caffe
             except ImportError:
                 print 'Did you forget to "make pycaffe"?'
                 raise
 
-            if platform.system() == 'Darwin' or platform.system() == 'Windows':
-                # Strange issue with protocol buffers and pickle - see issue #32
-                sys.path.insert(0, os.path.join(
-                    os.path.dirname(caffe.__file__), 'proto'))
+            # Strange issue with protocol buffers and pickle - see issue #32
+            sys.path.insert(0, os.path.join(
+                os.path.dirname(caffe.__file__), 'proto'))
 
             # Turn GLOG output back on for subprocess calls
             if GLOG_minloglevel is None:

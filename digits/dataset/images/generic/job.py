@@ -1,7 +1,9 @@
-# Copyright (c) 2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2015-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
-from digits.utils import subclass, override
 from ..job import ImageDatasetJob
+from digits.dataset import tasks
+from digits.utils import subclass, override
 
 # NOTE: Increment this everytime the pickled object changes
 PICKLE_VERSION = 1
@@ -24,4 +26,15 @@ class GenericImageDatasetJob(ImageDatasetJob):
     @override
     def job_type(self):
         return 'Generic Image Dataset'
+
+    @override
+    def train_db_task(self):
+        """
+        Return the task that creates the training set
+        """
+        for t in self.tasks:
+            if isinstance(t, tasks.AnalyzeDbTask) and 'train' in t.name().lower():
+                return t
+        return None
+
 

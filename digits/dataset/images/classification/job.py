@@ -1,8 +1,10 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
-from digits.utils import subclass, override
-from digits.status import Status
 from ..job import ImageDatasetJob
+from digits.dataset import tasks
+from digits.status import Status
+from digits.utils import subclass, override
 
 # NOTE: Increment this everytime the pickled object changes
 PICKLE_VERSION = 2
@@ -23,18 +25,12 @@ class ImageClassificationDatasetJob(ImageDatasetJob):
         super(ImageClassificationDatasetJob, self).__setstate__(state)
 
         if self.pickver_job_dataset_image_classification <= 1:
-            print 'Upgrading ImageClassificationDatasetJob to version 2'
             task = self.train_db_task()
             if task.image_dims[2] == 3:
                 if task.encoding == "jpg":
                     if task.mean_file.endswith('.binaryproto'):
-                        print '\tConverting mean file "%s" from RGB to BGR.' % task.path(task.mean_file)
-                        try:
-                            import caffe_pb2
-                        except ImportError:
-                            # See issue #32
-                            from caffe.proto import caffe_pb2
                         import numpy as np
+                        import caffe_pb2
 
                         old_blob = caffe_pb2.BlobProto()
                         with open(task.path(task.mean_file),'rb') as infile:
@@ -51,7 +47,6 @@ class ImageClassificationDatasetJob(ImageDatasetJob):
                         with open(task.path(task.mean_file), 'wb') as outfile:
                             outfile.write(new_blob.SerializeToString())
                 else:
-                    print '\tSetting "%s" status to ERROR because it was created with RGB channels' % self.name()
                     self.status = Status.ERROR
                     for task in self.tasks:
                         task.status = Status.ERROR
@@ -62,4 +57,14 @@ class ImageClassificationDatasetJob(ImageDatasetJob):
     @override
     def job_type(self):
         return 'Image Classification Dataset'
+
+    @override
+    def train_db_task(self):
+        """
+        Return the task that creates the training set
+        """
+        for t in self.tasks:
+            if isinstance(t, tasks.CreateDbTask) and 'train' in t.name().lower():
+                return t
+        return None
 

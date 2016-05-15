@@ -1,11 +1,18 @@
-# Copyright (c) 2014-2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2014-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
+import math
 import os.path
-
 import requests
-import cStringIO
-import PIL.Image
+
+# Find the best implementation available
+try:
+    from cStringIO import StringIO
+except ImportError:
+    from StringIO import StringIO
+
 import numpy as np
+import PIL.Image
 import scipy.misc
 
 from . import is_url, HTTP_TIMEOUT, errors
@@ -44,7 +51,7 @@ def load_image(path):
                     allow_redirects=False,
                     timeout=HTTP_TIMEOUT)
             r.raise_for_status()
-            stream = cStringIO.StringIO(r.content)
+            stream = StringIO(r.content)
             image = PIL.Image.open(stream)
         except requests.exceptions.RequestException as e:
             raise errors.LoadImageError, e.message
@@ -81,6 +88,26 @@ def load_image(path):
     else:
         raise errors.LoadImageError, 'Image mode "%s" not supported' % image.mode
 
+def upscale(image, ratio):
+    """
+    return upscaled image array
+
+    Arguments:
+    image -- a (H,W,C) numpy.ndarray
+    ratio -- scaling factor (>1)
+    """
+    if not isinstance(image, np.ndarray):
+        raise ValueError('Expected ndarray')
+    if ratio<1:
+        raise ValueError('Ratio must be greater than 1 (ratio=%f)' % ratio)
+    width = int(math.floor(image.shape[1] * ratio))
+    height = int(math.floor(image.shape[0] * ratio))
+    channels = image.shape[2]
+    out = np.ndarray((height, width, channels),dtype=np.uint8)
+    for x, y in np.ndindex((width,height)):
+        out[y,x] = image[math.floor(y/ratio), math.floor(x/ratio)]
+    return out
+
 def resize_image(image, height, width,
         channels=None,
         resize_mode=None,
@@ -99,7 +126,7 @@ def resize_image(image, height, width,
     """
     if resize_mode is None:
         resize_mode = 'squash'
-    if resize_mode not in ['crop', 'squash', 'fill', 'half_crop']:
+    if resize_mode not in ['crop', 'squash', 'fill', 'half_crop','pad_fill']:
         raise ValueError('resize_mode "%s" not supported' % resize_mode)
 
     if channels not in [None, 1, 3]:
@@ -194,6 +221,23 @@ def resize_image(image, height, width,
                 if (width - resize_width) % 2 == 1:
                     resize_width += 1
             image = scipy.misc.imresize(image, (resize_height, resize_width), interp=interp)
+        elif resize_mode == 'pad_fill':
+            # resize to biggest of ratios (relatively smaller image), keeping aspect ratio
+            if width_ratio > height_ratio:
+                resize_width = width
+                resize_height = int(round(image.shape[0] / width_ratio))
+                if (height - resize_height) % 2 == 1:
+                    resize_height += 1
+            else:
+                resize_height = height
+                resize_width = int(round(image.shape[1] / height_ratio))
+                if (width - resize_width) % 2 == 1:
+                    resize_width += 1
+            padded_img = np.zeros([width*1.1, height*1.1], dtype=np.uint8)
+            padded_img.fill(128)
+            image = scipy.misc.imresize(image, (resize_height, resize_width), interp=interp)
+            padded_img[(padded_img.shape[0] - image.shape[0])/2:(padded_img.shape[0] - image.shape[0])/2+image.shape[0],(padded_img.shape[1] - image.shape[1])/2:(padded_img.shape[1] - image.shape[1])/2 + image.shape[1]] = image
+            image = padded_img
         elif resize_mode == 'half_crop':
             # resize to average ratio keeping aspect ratio
             new_ratio = (width_ratio + height_ratio) / 2.0
@@ -215,30 +259,21 @@ def resize_image(image, height, width,
             raise Exception('unrecognized resize_mode "%s"' % resize_mode)
 
         # fill ends of dimension that is too short with random noise
-        if width_ratio > height_ratio:
-            padding = (height - resize_height)/2
-            noise_size = (padding, width)
-            if channels > 1:
-                noise_size += (channels,)
-            #noise = np.random.randint(127, 128, noise_size).astype('uint8')
-            noise = np.zeros(noise_size).astype('uint8')
-            noise.fill(128)
-            # print width,height
-            # print noise.shape
-            # print image.shape
-            image = np.concatenate((noise, image, noise), axis=0)
-        else:
-            padding = (width - resize_width)/2
-            noise_size = (height, padding)
-            if channels > 1:
-                noise_size += (channels,)
-            # noise = np.random.randint(127, 128, noise_size).astype('uint8')
-            noise = np.zeros(noise_size).astype('uint8')
-            noise.fill(128)
-            # print width,height
-            # print noise.shape
-            # print image.shape
-            image = np.concatenate((noise, image, noise), axis=1)
+        if resize_mode != 'pad_fill':
+            if width_ratio > height_ratio:
+                padding = (height - resize_height)/2
+                noise_size = (padding, width)
+                if channels > 1:
+                    noise_size += (channels,)
+                noise = np.random.randint(0, 255, noise_size).astype('uint8')
+                image = np.concatenate((noise, image, noise), axis=0)
+            else:
+                padding = (width - resize_width)/2
+                noise_size = (height, padding)
+                if channels > 1:
+                    noise_size += (channels,)
+                noise = np.random.randint(0, 255, noise_size).astype('uint8')
+                image = np.concatenate((noise, image, noise), axis=1)
 
         return image
 
@@ -259,10 +294,101 @@ def embed_image_html(image):
     else:
         raise ValueError('image must be a PIL.Image or a np.ndarray')
 
-    string_buf = cStringIO.StringIO()
-    image.save(string_buf, format='png')
+    # Read format from the image
+    fmt = image.format
+    if not fmt:
+        # default to JPEG
+        fmt = 'jpeg'
+    else:
+        fmt = fmt.lower()
+
+    string_buf = StringIO()
+    image.save(string_buf, format=fmt)
     data = string_buf.getvalue().encode('base64').replace('\n', '')
-    return 'data:image/png;base64,' + data
+    return 'data:image/%s;base64,%s' % (fmt, data)
+
+def get_layer_vis_square(data,
+        allow_heatmap = True,
+        normalize = True,
+        min_img_dim = 100,
+        max_width = 1200,
+        ):
+    """
+    Returns a vis_square for the given layer data
+
+    Arguments:
+    data -- a np.ndarray
+
+    Keyword arguments:
+    allow_heatmap -- if True, convert single channel images to heatmaps
+    normalize -- whether to normalize the data when visualizing
+    max_width -- maximum width for the vis_square
+    """
+    if data.ndim == 1:
+        # interpret as 1x1 grayscale images
+        # (N, 1, 1)
+        data = data[:, np.newaxis, np.newaxis]
+    elif data.ndim == 2:
+        # interpret as 1x1 grayscale images
+        # (N, 1, 1)
+        data = data.reshape((data.shape[0]*data.shape[1], 1, 1))
+    elif data.ndim == 3:
+        if data.shape[0] == 3:
+            # interpret as a color image
+            # (1, H, W,3)
+            data = data[[2,1,0],...] # BGR to RGB (see issue #59)
+            data = data.transpose(1,2,0)
+            data = data[np.newaxis,...]
+        else:
+            # interpret as grayscale images
+            # (N, H, W)
+            pass
+    elif data.ndim == 4:
+        if data.shape[0] == 3:
+            # interpret as HxW color images
+            # (N, H, W, 3)
+            data = data.transpose(1,2,3,0)
+            data = data[:,:,:,[2,1,0]] # BGR to RGB (see issue #59)
+        elif data.shape[1] == 3:
+            # interpret as HxW color images
+            # (N, H, W, 3)
+            data = data.transpose(0,2,3,1)
+            data = data[:,:,:,[2,1,0]] # BGR to RGB (see issue #59)
+        else:
+            # interpret as HxW grayscale images
+            # (N, H, W)
+            data = data.reshape((data.shape[0]*data.shape[1], data.shape[2], data.shape[3]))
+    else:
+        raise RuntimeError('unrecognized data shape: %s' % (data.shape,))
+
+    # chop off data so that it will fit within max_width
+    padsize = 0
+    width = data.shape[2]
+    if width > max_width:
+        data = data[:1,:max_width,:max_width]
+    else:
+        if width > 1:
+            padsize = 1
+            width += 1
+        n = max(max_width/width,1)
+        n *= n
+        data = data[:n]
+
+    if not allow_heatmap and data.ndim == 3:
+        data = data[...,np.newaxis]
+
+    vis = vis_square(data,
+            padsize     = padsize,
+            normalize   = normalize,
+            )
+
+    # find minimum dimension and upscale if necessary
+    _min = sorted(vis.shape[:2])[0]
+    if _min < min_img_dim:
+        # upscale image
+        ratio = min_img_dim/float(_min)
+        vis = upscale(vis, ratio)
+    return vis
 
 def vis_square(images,
         padsize=1,
@@ -281,7 +407,7 @@ def vis_square(images,
     Keyword arguments:
     padsize -- how many pixels go inbetween the tiles
     normalize -- if true, scales (min, max) across all images out to (0, 1)
-    colormap -- a string representing one of the suppoted colormaps
+    colormap -- a string representing one of the supported colormaps
     """
     assert 3 <= images.ndim <= 4, 'images.ndim must be 3 or 4'
     # convert to float since we're going to do some math
@@ -367,3 +493,4 @@ def get_color_map(name):
         greenmap    = [0,0,0.5,1,1,1,0.5,0,0]
         bluemap     = [0.5,1,1,1,0.5,0,0,0,0]
     return 255.0 * np.array(redmap), 255.0 * np.array(greenmap), 255.0 * np.array(bluemap)
+

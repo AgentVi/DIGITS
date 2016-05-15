@@ -1,38 +1,41 @@
-# Copyright (c) 2015, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2015-2016, NVIDIA CORPORATION.  All rights reserved.
+from __future__ import absolute_import
 
-import re
-import os
+import itertools
 import json
+import os
+import re
 import shutil
 import tempfile
 import time
 import unittest
-import itertools
 import urllib
 
-import mock
-import flask
-from gevent import monkey
-monkey.patch_all()
+# Find the best implementation available
+try:
+    from cStringIO import StringIO
+except ImportError:
+    from StringIO import StringIO
+
 from bs4 import BeautifulSoup
+import flask
+import mock
 import PIL.Image
 from urlparse import urlparse
-from cStringIO import StringIO
 
-try:
-    import caffe_pb2
-except ImportError:
-    # See issue #32
-    from caffe.proto import caffe_pb2
-
-import digits.webapp
-import digits.test_views
-import digits.dataset.images.generic.test_views
 from digits.config import config_value
+import digits.dataset.images.generic.test_views
+import digits.test_views
+import digits.webapp
+
+# Must import after importing digit.config
+import caffe_pb2
+
+import numpy as np
 
 # May be too short on a slow system
-TIMEOUT_DATASET = 15
-TIMEOUT_MODEL = 20
+TIMEOUT_DATASET = 45
+TIMEOUT_MODEL = 60
 
 ################################################################################
 # Base classes (they don't start with "Test" so nose won't run them)
@@ -63,13 +66,40 @@ layer {
   }
 }
 layer {
-  name: "train_loss"
+  name: "loss"
   type: "EuclideanLoss"
   bottom: "output"
   bottom: "label"
   top: "loss"
+  exclude { stage: "deploy" }
 }
 """
+
+    TORCH_NETWORK = \
+"""
+return function(p)
+    local nDim = 1
+    if p.inputShape then p.inputShape:apply(function(x) nDim=nDim*x end) end
+    local net = nn.Sequential()
+    net:add(nn.MulConstant(0.004))
+    net:add(nn.View(-1):setNumInputDims(3))  -- flatten
+    -- set all weights and biases to zero as this speeds learning up
+    -- for the type of problem we're trying to solve in this test
+    local linearLayer = nn.Linear(nDim, 2)
+    linearLayer.weight:fill(0)
+    linearLayer.bias:fill(0)
+    net:add(linearLayer) -- c*h*w -> 2
+    return {
+        model = net,
+        loss = nn.MSECriterion(),
+    }
+end
+"""
+    @classmethod
+    def setUpClass(cls):
+        super(BaseViewsTest, cls).setUpClass()
+        if cls.FRAMEWORK=='torch' and not config_value('torch_root'):
+            raise unittest.SkipTest('Torch not found')
 
     @classmethod
     def model_exists(cls, job_id):
@@ -96,7 +126,7 @@ layer {
 
     @classmethod
     def network(cls):
-        return cls.CAFFE_NETWORK
+        return cls.TORCH_NETWORK if cls.FRAMEWORK=='torch' else cls.CAFFE_NETWORK
 
 
 class BaseViewsTestWithDataset(BaseViewsTest,
@@ -107,6 +137,9 @@ class BaseViewsTestWithDataset(BaseViewsTest,
 
     # Inherited classes may want to override these attributes
     CROP_SIZE = None
+    TRAIN_EPOCHS = 3
+    LR_POLICY = None
+    LEARNING_RATE = None
 
     @classmethod
     def setUpClass(cls):
@@ -121,7 +154,7 @@ class BaseViewsTestWithDataset(BaseViewsTest,
         super(BaseViewsTestWithDataset, cls).tearDownClass()
 
     @classmethod
-    def create_model(cls, **kwargs):
+    def create_model(cls, learning_rate=None, **kwargs):
         """
         Create a model
         Returns the job_id
@@ -130,17 +163,24 @@ class BaseViewsTestWithDataset(BaseViewsTest,
         Keyword arguments:
         **kwargs -- data to be sent with POST request
         """
+        if learning_rate is None:
+            learning_rate = cls.LEARNING_RATE
         data = {
                 'model_name':       'test_model',
                 'dataset':          cls.dataset_id,
                 'method':           'custom',
                 'custom_network':   cls.network(),
                 'batch_size':       10,
-                'train_epochs':     3,
+                'train_epochs':     cls.TRAIN_EPOCHS,
+                'random_seed':      0xCAFEBABE,
                 'framework':        cls.FRAMEWORK,
                 }
         if cls.CROP_SIZE is not None:
             data['crop_size'] = cls.CROP_SIZE
+        if cls.LR_POLICY is not None:
+            data['lr_policy'] = cls.LR_POLICY
+        if learning_rate is not None:
+            data['learning_rate'] = learning_rate
         data.update(kwargs)
 
         request_json = data.pop('json', False)
@@ -158,12 +198,14 @@ class BaseViewsTestWithDataset(BaseViewsTest,
 
         # expect a redirect
         if not 300 <= rv.status_code <= 310:
-            s = BeautifulSoup(rv.data)
+            print 'Status code:', rv.status_code
+            s = BeautifulSoup(rv.data, 'html.parser')
             div = s.select('div.alert-danger')
             if div:
-                raise RuntimeError(div[0])
+                print div[0]
             else:
-                raise RuntimeError('Failed to create model')
+                print rv.data
+            raise RuntimeError('Failed to create dataset - status %s' % rv.status_code)
 
         job_id = cls.job_id_from_response(rv)
         assert cls.model_exists(job_id), 'model not found after successful creation'
@@ -198,9 +240,13 @@ class BaseTestViews(BaseViewsTest):
         rv = self.app.post('/models/visualize-network?framework='+self.FRAMEWORK,
                 data = {'custom_network': self.network()}
                 )
-        s = BeautifulSoup(rv.data)
+        s = BeautifulSoup(rv.data, 'html.parser')
         body = s.select('body')
-        assert rv.status_code == 200, 'POST failed with %s\n\n%s' % (rv.status_code, body)
+        if rv.status_code != 200:
+            body = s.select('body')[0]
+            if 'InvocationException' in str(body):
+                raise unittest.SkipTest('GraphViz not installed')
+            raise AssertionError('POST failed with %s\n\n%s' % (rv.status_code, body))
         image = s.select('img')
         assert image is not None, "didn't return an image"
 
@@ -283,6 +329,42 @@ class BaseTestCreation(BaseViewsTestWithDataset):
         job_id = self.create_model(select_gpus_list=','.join(gpu_list), batch_size=len(gpu_list))
         assert self.model_wait_completion(job_id) == 'Done', 'create failed'
 
+    def infer_one_for_job(self, job_id):
+        # carry out one inference test per category in dataset
+        image_path = os.path.join(self.imageset_folder, self.test_image)
+        with open(image_path,'rb') as infile:
+            # StringIO wrapping is needed to simulate POST file upload.
+            image_upload = (StringIO(infile.read()), 'image.png')
+
+        rv = self.app.post(
+                '/models/images/generic/infer_one?job_id=%s' % job_id,
+                data = {
+                    'image_file': image_upload,
+                    'show_visualizations': 'y',
+                    }
+                )
+        s = BeautifulSoup(rv.data, 'html.parser')
+        body = s.select('body')
+        assert rv.status_code == 200, 'POST failed with %s\n\n%s' % (rv.status_code, body)
+
+    def test_infer_one_mean_image(self):
+        # test the creation
+        job_id = self.create_model(use_mean = 'image')
+        assert self.model_wait_completion(job_id) == 'Done', 'job failed'
+        self.infer_one_for_job(job_id)
+
+    def test_infer_one_mean_pixel(self):
+        # test the creation
+        job_id = self.create_model(use_mean = 'pixel')
+        assert self.model_wait_completion(job_id) == 'Done', 'job failed'
+        self.infer_one_for_job(job_id)
+
+    def test_infer_one_mean_none(self):
+        # test the creation
+        job_id = self.create_model(use_mean = 'none')
+        assert self.model_wait_completion(job_id) == 'Done', 'job failed'
+        self.infer_one_for_job(job_id)
+
     def test_retrain(self):
         job1_id = self.create_model()
         assert self.model_wait_completion(job1_id) == 'Done', 'first job failed'
@@ -297,9 +379,93 @@ class BaseTestCreation(BaseViewsTestWithDataset):
                 }
         options['%s-snapshot' % job1_id] = content['snapshots'][-1]
 
-        job_id = self.create_model(**options)
-        assert self.model_wait_completion(job1_id) == 'Done', 'second job failed'
+        job2_id = self.create_model(**options)
+        assert self.model_wait_completion(job2_id) == 'Done', 'second job failed'
 
+    def test_retrain_twice(self):
+        # retrain from a job which already had a pretrained model
+        job1_id = self.create_model()
+        assert self.model_wait_completion(job1_id) == 'Done', 'first job failed'
+        rv = self.app.get('/models/%s.json' % job1_id)
+        assert rv.status_code == 200, 'json load failed with %s' % rv.status_code
+        content = json.loads(rv.data)
+        assert len(content['snapshots']), 'should have at least snapshot'
+        options_2 = {
+                'method': 'previous',
+                'previous_networks': job1_id,
+                }
+        options_2['%s-snapshot' % job1_id] = content['snapshots'][-1]
+        job2_id = self.create_model(**options_2)
+        assert self.model_wait_completion(job2_id) == 'Done', 'second job failed'
+        options_3 = {
+                'method': 'previous',
+                'previous_networks': job2_id,
+                }
+        options_3['%s-snapshot' % job2_id] = -1
+        job3_id = self.create_model(**options_3)
+        assert self.model_wait_completion(job3_id) == 'Done', 'third job failed'
+
+    def test_diverging_network(self):
+        if self.FRAMEWORK == 'caffe':
+            raise unittest.SkipTest('Test not implemented for Caffe')
+        job_id = self.create_model(json=True, learning_rate=1e15)
+        assert self.model_wait_completion(job_id) == 'Error', 'job should have failed'
+        job_info = self.job_info_html(job_id=job_id, job_type='models')
+        assert 'Try decreasing your learning rate' in job_info
+
+    def test_clone(self):
+        options_1 = {
+            'shuffle': True,
+            'lr_step_size': 33.0,
+            'previous_networks': 'None',
+            'lr_inv_power': 0.5,
+            'lr_inv_gamma': 0.1,
+            'lr_poly_power': 3.0,
+            'lr_exp_gamma': 0.95,
+            'use_mean': 'image',
+            'custom_network_snapshot': '',
+            'lr_multistep_gamma': 0.5,
+            'lr_policy': 'step',
+            'crop_size': None,
+            'val_interval': 3.0,
+            'random_seed': 123,
+            'learning_rate': 0.01,
+            'standard_networks': 'None',
+            'lr_step_gamma': 0.1,
+            'lr_sigmoid_step': 50.0,
+            'lr_sigmoid_gamma': 0.1,
+            'lr_multistep_values': '50,85',
+            'solver_type': 'SGD',
+        }
+
+        job1_id = self.create_model(**options_1)
+        assert self.model_wait_completion(job1_id) == 'Done', 'first job failed'
+        rv = self.app.get('/models/%s.json' % job1_id)
+        assert rv.status_code == 200, 'json load failed with %s' % rv.status_code
+        content1 = json.loads(rv.data)
+
+        ## Clone job1 as job2
+        options_2 = {
+            'clone': job1_id,
+        }
+
+        job2_id = self.create_model(**options_2)
+        assert self.model_wait_completion(job2_id) == 'Done', 'second job failed'
+        rv = self.app.get('/models/%s.json' % job2_id)
+        assert rv.status_code == 200, 'json load failed with %s' % rv.status_code
+        content2 = json.loads(rv.data)
+
+        ## These will be different
+        content1.pop('id')
+        content2.pop('id')
+        content1.pop('directory')
+        content2.pop('directory')
+        assert (content1 == content2), 'job content does not match'
+
+        job1 = digits.webapp.scheduler.get_job(job1_id)
+        job2 = digits.webapp.scheduler.get_job(job2_id)
+
+        assert (job1.form_data == job2.form_data), 'form content does not match'
 
 class BaseTestCreated(BaseViewsTestWithModel):
     """
@@ -341,6 +507,20 @@ class BaseTestCreated(BaseViewsTestWithModel):
         assert content['id'] == self.model_id, 'expected different job_id'
         assert len(content['snapshots']) > 0, 'no snapshots in list'
 
+    def test_edit_name(self):
+        status = self.edit_job(
+                self.dataset_id,
+                name='new name'
+                )
+        assert status == 200, 'failed with %s' % status
+
+    def test_edit_notes(self):
+        status = self.edit_job(
+                self.dataset_id,
+                notes='new notes'
+                )
+        assert status == 200, 'failed with %s' % status
+
     def test_infer_one(self):
         image_path = os.path.join(self.imageset_folder, self.test_image)
         with open(image_path,'rb') as infile:
@@ -354,7 +534,7 @@ class BaseTestCreated(BaseViewsTestWithModel):
                     'show_visualizations': 'y',
                     }
                 )
-        s = BeautifulSoup(rv.data)
+        s = BeautifulSoup(rv.data, 'html.parser')
         body = s.select('body')
         assert rv.status_code == 200, 'POST failed with %s\n\n%s' % (rv.status_code, body)
 
@@ -386,7 +566,36 @@ class BaseTestCreated(BaseViewsTestWithModel):
                 '/models/images/generic/infer_many?job_id=%s' % self.model_id,
                 data = {'image_list': file_upload}
                 )
-        s = BeautifulSoup(rv.data)
+        s = BeautifulSoup(rv.data, 'html.parser')
+        body = s.select('body')
+        assert rv.status_code == 200, 'POST failed with %s\n\n%s' % (rv.status_code, body)
+        headers = s.select('table.table th')
+        assert headers is not None, 'unrecognized page format'
+
+    def test_infer_db(self):
+        val_db_path = os.path.join(self.imageset_folder, 'val_images')
+
+        rv = self.app.post(
+                '/models/images/generic/infer_db?job_id=%s' % self.model_id,
+                data = {'db_path': val_db_path}
+                )
+        s = BeautifulSoup(rv.data, 'html.parser')
+        body = s.select('body')
+        assert rv.status_code == 200, 'POST failed with %s\n\n%s' % (rv.status_code, body)
+        headers = s.select('table.table th')
+        assert headers is not None, 'unrecognized page format'
+
+    def test_infer_many_from_folder(self):
+        textfile_images = '%s\n' % os.path.basename(self.test_image)
+
+        # StringIO wrapping is needed to simulate POST file upload.
+        file_upload = (StringIO(textfile_images), 'images.txt')
+
+        rv = self.app.post(
+                '/models/images/generic/infer_many?job_id=%s' % self.model_id,
+                data = {'image_list': file_upload, 'image_folder': os.path.dirname(self.test_image)}
+                )
+        s = BeautifulSoup(rv.data, 'html.parser')
         body = s.select('body')
         assert rv.status_code == 200, 'POST failed with %s\n\n%s' % (rv.status_code, body)
         headers = s.select('table.table th')
@@ -403,6 +612,17 @@ class BaseTestCreated(BaseViewsTestWithModel):
                 data = {'image_list': file_upload}
                 )
         assert rv.status_code == 200, 'POST failed with %s' % rv.status_code
+        data = json.loads(rv.data)
+        assert 'outputs' in data, 'invalid response'
+
+    def test_infer_db_json(self):
+        val_db_path = os.path.join(self.imageset_folder, 'val_images')
+
+        rv = self.app.post(
+                '/models/images/generic/infer_db.json?job_id=%s' % self.model_id,
+                data = {'db_path': val_db_path}
+                )
+        assert rv.status_code == 200, 'POST failed with %s\n\n%s' % (rv.status_code, body)
         data = json.loads(rv.data)
         assert 'outputs' in data, 'invalid response'
 
@@ -516,12 +736,35 @@ layer {
   }
 }
 layer {
-  name: "train_loss"
+  name: "loss"
   type: "EuclideanLoss"
   bottom: "output"
   bottom: "label"
   top: "loss"
+  exclude { stage: "deploy" }
 }
+"""
+
+    TORCH_NETWORK = \
+"""
+return function(p)
+    local croplen = 8, channels
+    if p.inputShape then channels=p.inputShape[1] else channels=1 end
+    local net = nn.Sequential()
+    net:add(nn.MulConstant(0.004))
+    net:add(nn.View(-1):setNumInputDims(3))  -- flatten
+    -- set all weights and biases to zero as this speeds learning up
+    -- for the type of problem we're trying to solve in this test
+    local linearLayer = nn.Linear(channels*croplen*croplen, 2)
+    linearLayer.weight:fill(0)
+    linearLayer.bias:fill(0)
+    net:add(linearLayer) -- c*croplen*croplen -> 2
+    return {
+        model = net,
+        loss = nn.MSECriterion(),
+        croplen = croplen
+    }
+end
 """
 
 class BaseTestCreatedCropInForm(BaseTestCreated):
@@ -549,4 +792,104 @@ class TestCaffeCreatedCropInNetwork(BaseTestCreatedCropInNetwork):
 class TestCaffeCreatedCropInForm(BaseTestCreatedCropInForm):
     FRAMEWORK = 'caffe'
 
+class TestTorchViews(BaseTestViews):
+    FRAMEWORK = 'torch'
 
+class TestTorchCreation(BaseTestCreation):
+    FRAMEWORK = 'torch'
+
+class TestTorchCreated(BaseTestCreated):
+    FRAMEWORK = 'torch'
+
+class TestTorchCreatedCropInNetwork(BaseTestCreatedCropInNetwork):
+    FRAMEWORK = 'torch'
+
+class TestTorchCreatedCropInForm(BaseTestCreatedCropInForm):
+    FRAMEWORK = 'torch'
+
+class TestTorchDatasetModelInteractions(BaseTestDatasetModelInteractions):
+    FRAMEWORK = 'torch'
+
+class TestTorchTableOutput(BaseTestCreated):
+    FRAMEWORK = 'torch'
+    TORCH_NETWORK = \
+"""
+return function(p)
+    -- same network as in class BaseTestCreated except that each gradient
+    -- is learnt separately: the input is fed into nn.ConcatTable and
+    -- each branch outputs one of the gradients
+    local nDim = 1
+    if p.inputShape then p.inputShape:apply(function(x) nDim=nDim*x end) end
+    local net = nn.Sequential()
+    net:add(nn.MulConstant(0.004))
+    net:add(nn.View(-1):setNumInputDims(3))  -- flatten
+    -- set all weights and biases to zero as this speeds learning up
+    -- for the type of problem we're trying to solve in this test
+    local linearLayer1 = nn.Linear(nDim, 1)
+    linearLayer1.weight:fill(0)
+    linearLayer1.bias:fill(0)
+    local linearLayer2 = nn.Linear(nDim, 1)
+    linearLayer2.weight:fill(0)
+    linearLayer2.bias:fill(0)
+    -- create concat table
+    local parallel = nn.ConcatTable()
+    parallel:add(linearLayer1):add(linearLayer2)
+    net:add(parallel)
+    -- create two MSE criteria to optimize each gradient separately
+    local mse1 = nn.MSECriterion()
+    local mse2 = nn.MSECriterion()
+    -- now create a criterion that takes as input each of the two criteria
+    local finalCriterion = nn.ParallelCriterion(false):add(mse1):add(mse2)
+    -- create label hook
+    function labelHook(input, dblabel)
+        -- split label alongside 2nd dimension
+        local labelTable = dblabel:split(1,2)
+        return labelTable
+    end
+    return {
+        model = net,
+        loss = finalCriterion,
+        labelHook = labelHook,
+    }
+end
+"""
+
+class TestTorchNDOutput(BaseTestCreated):
+    FRAMEWORK = 'torch'
+    CROP_SIZE = 8
+    TORCH_NETWORK = \
+"""
+return function(p)
+    -- this model just forwards the input as is
+    local net = nn.Sequential():add(nn.Identity())
+    -- create label hook
+    function labelHook(input, dblabel)
+        return input
+    end
+    return {
+        model = net,
+        loss = nn.AbsCriterion(),
+        labelHook = labelHook,
+    }
+end
+"""
+
+    def test_infer_one_json(self):
+
+        image_path = os.path.join(self.imageset_folder, self.test_image)
+        with open(image_path,'rb') as infile:
+            # StringIO wrapping is needed to simulate POST file upload.
+            image_upload = (StringIO(infile.read()), 'image.png')
+
+        rv = self.app.post(
+                '/models/images/generic/infer_one.json?job_id=%s' % self.model_id,
+                data = {
+                    'image_file': image_upload,
+                    }
+                )
+        assert rv.status_code == 200, 'POST failed with %s' % rv.status_code
+        # make sure the shape of the output matches the shape of the input
+        data = json.loads(rv.data)
+        output = np.array(data['outputs']['output'][0])
+        assert output.shape == (1, self.CROP_SIZE, self.CROP_SIZE), \
+                'shape mismatch: %s' % str(output.shape)
