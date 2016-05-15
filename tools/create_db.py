@@ -240,7 +240,7 @@ def create_db(input_file, output_dir,
         raise ValueError('invalid image height')
     if image_channels not in [1,3]:
         raise ValueError('invalid number of channels')
-    if resize_mode not in [None, 'crop', 'squash', 'fill', 'half_crop']:
+    if resize_mode not in [None, 'crop', 'squash', 'fill', 'half_crop','pad_fill']:
         raise ValueError('invalid resize_mode')
     if image_folder is not None and not os.path.exists(image_folder):
         raise ValueError('image_folder does not exist')
