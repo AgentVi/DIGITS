@@ -200,11 +200,11 @@ class CaffeTrainTask(TrainTask):
         return mean_image
 
     def get_mean_pixel(self, mean_file):
-        mean_image = self.get_mean_image(mean_file)
-        mean_pixel = None
-        if mean_image is not None:
-            mean_pixel = mean_image.mean(1).mean(1)
-        return mean_pixel
+        #mean_image = self.get_mean_image(mean_file)
+        #mean_pixel = None
+        #if mean_image is not None:
+        #    mean_pixel = mean_image.mean(1).mean(1)
+        return 128
 
     def set_mean_value(self, layer, mean_pixel):
         # remove any values that may already be in the network
