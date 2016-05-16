@@ -553,7 +553,7 @@ def _load_thread(load_queue, write_queue, summary_queue,
 
     if compute_mean:
         if(resize_mode == 'pad_fill'):
-            image_sum = _initial_image_sum(image_width*1.1, image_height*1.1, image_channels)
+            image_sum = _initial_image_sum(image_width, image_height, image_channels)
         else:
 
             image_sum = _initial_image_sum(image_width, image_height , image_channels)
