@@ -128,7 +128,7 @@ def resize_image(image, height, width,
     """
     if resize_mode is None:
         resize_mode = 'squash'
-    if resize_mode not in ['crop', 'squash', 'fill', 'half_crop', 'pad_fill']:
+    if resize_mode not in ['crop', 'squash', 'fill', 'half_crop', 'pad_fill', 'pad_fill_noise']:
         raise ValueError('resize_mode "%s" not supported' % resize_mode)
 
     if channels not in [None, 1, 3]:
@@ -223,7 +223,7 @@ def resize_image(image, height, width,
                 if (width - resize_width) % 2 == 1:
                     resize_width += 1
             image = scipy.misc.imresize(image, (resize_height, resize_width), interp=interp)
-        elif resize_mode == 'pad_fill':
+        elif resize_mode == 'pad_fill' or resize_mode == 'pad_fill_noise':
 
             # resize to biggest of ratios (relatively smaller image), keeping aspect ratio
             if width_ratio > height_ratio:
@@ -236,8 +236,12 @@ def resize_image(image, height, width,
                 resize_width = int(round(image.shape[1] / height_ratio))
                 if (width - resize_width) % 2 == 1:
                     resize_width += 1
-            padded_img = np.zeros((width, height), dtype=np.uint8)
-            padded_img.fill(128)
+            if resize_mode == 'pad_fill':
+                padded_img = np.zeros((width, height), dtype=np.uint8)
+                padded_img.fill(128)
+            else:
+                padded_img = np.random.randint(0, 255, (width, height)).astype('uint8')
+
             image = scipy.misc.imresize(image, (int(round(resize_height*0.9)), int(round(resize_width*0.9))), interp=interp)
             padded_img[(padded_img.shape[0] - image.shape[0])/2:(padded_img.shape[0] - image.shape[0])/2+image.shape[0],(padded_img.shape[1] - image.shape[1])/2:(padded_img.shape[1] - image.shape[1])/2 + image.shape[1]] = image
 
@@ -263,7 +267,7 @@ def resize_image(image, height, width,
             raise Exception('unrecognized resize_mode "%s"' % resize_mode)
 
         # fill ends of dimension that is too short with random noise
-        if resize_mode != 'pad_fill':
+        if resize_mode != 'pad_fill' and resize_mode != 'pad_fill_noise':
             if width_ratio > height_ratio:
                 padding = (height - resize_height)/2
                 noise_size = (padding, width)

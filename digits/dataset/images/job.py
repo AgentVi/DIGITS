@@ -30,7 +30,8 @@ class ImageDatasetJob(DatasetJob):
             ('squash', 'Squash'),
             ('fill', 'Fill'),
             ('half_crop', 'Half crop, half fill'),
-            ('pad_fill', 'Pad and Fill')
+            ('pad_fill', 'Pad and Fill'),
+            ('pad_fill_noise', 'Pad and Fill with noise')
         ]
 
     def resize_mode_name(self):
