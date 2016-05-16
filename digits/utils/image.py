@@ -238,7 +238,7 @@ def resize_image(image, height, width,
                     resize_width += 1
             padded_img = np.zeros((width, height), dtype=np.uint8)
             padded_img.fill(128)
-            image = scipy.misc.imresize(image, (resize_height*0.9, resize_width*0.9), interp=interp)
+            image = scipy.misc.imresize(image, int(round(resize_height*0.9)), int(round(resize_width*0.9)), interp=interp)
             padded_img[(padded_img.shape[0] - image.shape[0])/2:(padded_img.shape[0] - image.shape[0])/2+image.shape[0],(padded_img.shape[1] - image.shape[1])/2:(padded_img.shape[1] - image.shape[1])/2 + image.shape[1]] = image
 
             image = padded_img
