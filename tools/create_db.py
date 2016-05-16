@@ -240,7 +240,7 @@ def create_db(input_file, output_dir,
         raise ValueError('invalid image height')
     if image_channels not in [1,3]:
         raise ValueError('invalid number of channels')
-    if resize_mode not in [None, 'crop', 'squash', 'fill', 'half_crop','pad_fill','pad_fill_noise']:
+    if resize_mode not in [None, 'crop', 'squash', 'fill', 'fill_noise', 'half_crop','pad_fill','pad_fill_noise']:
         raise ValueError('invalid resize_mode')
     if image_folder is not None and not os.path.exists(image_folder):
         raise ValueError('image_folder does not exist')
@@ -734,7 +734,7 @@ if __name__ == '__main__':
             help='channels of resized images (1 for grayscale, 3 for color [default])'
             )
     parser.add_argument('-r', '--resize_mode',
-            help='resize mode for images (must be "crop", "squash" [default], "fill", "pad_fill", "pad_fill_noise" or "half_crop")'
+            help='resize mode for images (must be "crop", "squash" [default], "fill", "fill_noise", "pad_fill", "pad_fill_noise" or "half_crop")'
             )
     parser.add_argument('-m', '--mean_file', action='append',
             help="location to output the image mean (doesn't save mean if not specified)")

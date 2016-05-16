@@ -149,7 +149,7 @@ class TestResizeImage():
 
                     # test channels={3,1}
                     for c in [3, 1]:
-                        for m in ['squash', 'crop', 'fill', 'half_crop', 'pad_fill','pad_fill_noise']:
+                        for m in ['squash', 'crop', 'fill', 'fill_noise', 'half_crop', 'pad_fill','pad_fill_noise']:
                             if c == 3:
                                 s = (h, w, 3)
                             else:

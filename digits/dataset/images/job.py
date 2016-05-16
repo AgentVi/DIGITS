@@ -29,6 +29,7 @@ class ImageDatasetJob(DatasetJob):
             ('crop', 'Crop'),
             ('squash', 'Squash'),
             ('fill', 'Fill'),
+            ('fill_noise', 'Fill with noise'),
             ('half_crop', 'Half crop, half fill'),
             ('pad_fill', 'Pad and Fill'),
             ('pad_fill_noise', 'Pad and Fill with noise')

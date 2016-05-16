@@ -128,7 +128,7 @@ def resize_image(image, height, width,
     """
     if resize_mode is None:
         resize_mode = 'squash'
-    if resize_mode not in ['crop', 'squash', 'fill', 'half_crop', 'pad_fill', 'pad_fill_noise']:
+    if resize_mode not in ['crop', 'squash', 'fill', 'fill_noise', 'half_crop', 'pad_fill', 'pad_fill_noise']:
         raise ValueError('resize_mode "%s" not supported' % resize_mode)
 
     if channels not in [None, 1, 3]:
@@ -210,7 +210,7 @@ def resize_image(image, height, width,
             start = int(round((resize_height-height)/2.0))
             return image[start:start+height,:]
     else:
-        if resize_mode == 'fill':
+        if resize_mode == 'fill' or resize_mode == 'fill_noise':
             # resize to biggest of ratios (relatively smaller image), keeping aspect ratio
             if width_ratio > height_ratio:
                 resize_width = width
@@ -273,14 +273,23 @@ def resize_image(image, height, width,
                 noise_size = (padding, width)
                 if channels > 1:
                     noise_size += (channels,)
-                noise = np.random.randint(0, 255, noise_size).astype('uint8')
+
+                if resize_mode == 'fill_noise':
+                    noise = np.random.randint(0, 255, noise_size).astype('uint8')
+                else:
+                    noise = np.random.randint(128, 128, noise_size).astype('uint8')
                 image = np.concatenate((noise, image, noise), axis=0)
             else:
                 padding = (width - resize_width)/2
                 noise_size = (height, padding)
                 if channels > 1:
                     noise_size += (channels,)
-                noise = np.random.randint(0, 255, noise_size).astype('uint8')
+
+                if resize_mode == 'fill_noise':
+                    noise = np.random.randint(0, 255, noise_size).astype('uint8')
+                else:
+                    noise = np.zeros(noise_size, dtype=np.uint8)
+                    noise.fill(128)
                 image = np.concatenate((noise, image, noise), axis=1)
 
         return image

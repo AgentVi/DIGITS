@@ -92,7 +92,7 @@ if __name__ == '__main__':
             )
     parser.add_argument('-m', '--mode',
             default='squash',
-            help='Resize mode (squash/crop/fill/half_crop/pad_fill/pad_fill_noise) [default is squash]'
+            help='Resize mode (squash/crop/fill/fill_noise/half_crop/pad_fill/pad_fill_noise) [default is squash]'
             )
 
     args = vars(parser.parse_args())
