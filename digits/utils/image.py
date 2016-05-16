@@ -112,6 +112,8 @@ def resize_image(image, height, width,
         channels=None,
         resize_mode=None,
         ):
+
+
     """
     Resizes an image and returns it as a np.array
 
@@ -126,7 +128,7 @@ def resize_image(image, height, width,
     """
     if resize_mode is None:
         resize_mode = 'squash'
-    if resize_mode not in ['crop', 'squash', 'fill', 'half_crop','pad_fill']:
+    if resize_mode not in ['crop', 'squash', 'fill', 'half_crop', 'pad_fill']:
         raise ValueError('resize_mode "%s" not supported' % resize_mode)
 
     if channels not in [None, 1, 3]:
@@ -222,6 +224,7 @@ def resize_image(image, height, width,
                     resize_width += 1
             image = scipy.misc.imresize(image, (resize_height, resize_width), interp=interp)
         elif resize_mode == 'pad_fill':
+
             # resize to biggest of ratios (relatively smaller image), keeping aspect ratio
             if width_ratio > height_ratio:
                 resize_width = width
@@ -233,10 +236,11 @@ def resize_image(image, height, width,
                 resize_width = int(round(image.shape[1] / height_ratio))
                 if (width - resize_width) % 2 == 1:
                     resize_width += 1
-            padded_img = np.zeros([width*1.1, height*1.1], dtype=np.uint8)
+            padded_img = np.zeros((width*1.1, height*1.1), dtype=np.uint8)
             padded_img.fill(128)
             image = scipy.misc.imresize(image, (resize_height, resize_width), interp=interp)
             padded_img[(padded_img.shape[0] - image.shape[0])/2:(padded_img.shape[0] - image.shape[0])/2+image.shape[0],(padded_img.shape[1] - image.shape[1])/2:(padded_img.shape[1] - image.shape[1])/2 + image.shape[1]] = image
+
             image = padded_img
         elif resize_mode == 'half_crop':
             # resize to average ratio keeping aspect ratio

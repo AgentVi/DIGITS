@@ -550,14 +550,16 @@ def _load_thread(load_queue, write_queue, summary_queue,
     Stores cumulative results in summary_queue
     """
     images_added = 0
+
     if compute_mean:
         if(resize_mode == 'pad_fill'):
             image_sum = _initial_image_sum(image_width*1.1, image_height*1.1, image_channels)
         else:
+
             image_sum = _initial_image_sum(image_width, image_height , image_channels)
+
     else:
         image_sum = None
-
 
 
     while not load_queue.empty():
@@ -576,15 +578,16 @@ def _load_thread(load_queue, write_queue, summary_queue,
             logger.warning('[%s] %s: %s' % (path, type(e).__name__, e) )
             continue
 
+
         image = utils.image.resize_image(image,
                 image_height, image_width,
                 channels    = image_channels,
                 resize_mode = resize_mode,
                 )
 
-        print  image_sum.size,image.size
         if compute_mean:
-            image_sum += image
+            if(image.shape == image_sum.shape):
+                image_sum = image_sum + image
 
         if backend == 'lmdb':
             datum = _array_to_datum(image, label, encoding)
@@ -736,7 +739,7 @@ if __name__ == '__main__':
             help='channels of resized images (1 for grayscale, 3 for color [default])'
             )
     parser.add_argument('-r', '--resize_mode',
-            help='resize mode for images (must be "crop", "squash" [default], "fill" or "half_crop")'
+            help='resize mode for images (must be "crop", "squash" [default], "fill", "pad_fill" or "half_crop")'
             )
     parser.add_argument('-m', '--mean_file', action='append',
             help="location to output the image mean (doesn't save mean if not specified)")
